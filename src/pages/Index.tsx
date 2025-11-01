@@ -71,6 +71,33 @@ const Index = () => {
     }
   };
 
+  const handleExportToExcel = () => {
+    if (!scrapeData?.investments || scrapeData.investments.length === 0) {
+      toast({
+        title: "No data to export",
+        description: "Please scrape some investment data first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const { exportToExcel } = require("@/utils/excelExport");
+      exportToExcel(scrapeData.investments);
+      toast({
+        title: "Export successful!",
+        description: `Exported ${scrapeData.investments.length} investments to investments_data.xlsx`,
+      });
+    } catch (error) {
+      console.error("Export error:", error);
+      toast({
+        title: "Export failed",
+        description: error instanceof Error ? error.message : "Failed to export to Excel",
+        variant: "destructive",
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-subtle">
       {/* Header */}
@@ -144,7 +171,7 @@ const Index = () => {
               </p>
             </div>
             {scrapeData?.investments && scrapeData.investments.length > 0 && (
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={handleExportToExcel}>
                 <FileSpreadsheet className="w-4 h-4 mr-2" />
                 Export to Excel
               </Button>
