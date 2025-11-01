@@ -4,41 +4,42 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Search, Database, FileSpreadsheet } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
+import { InvestmentTable } from "@/components/InvestmentTable";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
-interface CrawlData {
-  markdown?: string;
-  html?: string;
-  metadata?: {
-    title?: string;
-    description?: string;
-    url?: string;
-    [key: string]: any;
-  };
+export interface Investment {
+  name: string;
+  industry?: string;
+  date?: string;
+  description?: string;
+  partners?: string[];
+  portfolioUrl?: string;
+  sourceUrl: string;
 }
 
-interface CrawlResponse {
+interface ScrapeResponse {
   success: boolean;
-  status?: string;
-  completed?: number;
-  total?: number;
-  creditsUsed?: number;
-  expiresAt?: string;
-  data?: CrawlData[];
+  crawlStats?: {
+    completed: number;
+    total: number;
+    creditsUsed: number;
+  };
+  investments?: Investment[];
+  rawData?: any[];
 }
 
 const Index = () => {
   const [url, setUrl] = useState("");
   const [isScraperRunning, setIsScraperRunning] = useState(false);
-  const [crawlData, setCrawlData] = useState<CrawlResponse | null>(null);
+  const [scrapeData, setScrapeData] = useState<ScrapeResponse | null>(null);
   const { toast } = useToast();
 
   const handleStartScraping = async () => {
     if (!url.trim()) return;
     
     setIsScraperRunning(true);
-    setCrawlData(null);
+    setScrapeData(null);
 
     try {
       const { data, error } = await supabase.functions.invoke('scrape', {
@@ -50,10 +51,10 @@ const Index = () => {
       }
 
       if (data?.success) {
-        setCrawlData(data.data);
+        setScrapeData(data);
         toast({
           title: "Success!",
-          description: `Scraped ${data.data.completed} pages successfully`,
+          description: `Extracted ${data.investments?.length || 0} investments from ${data.crawlStats?.completed || 0} pages`,
         });
       } else {
         throw new Error(data?.error || "Failed to scrape website");
@@ -137,10 +138,12 @@ const Index = () => {
             <div>
               <h2 className="text-xl font-semibold text-foreground">Results</h2>
               <p className="text-sm text-muted-foreground">
-                {crawlData ? `${crawlData.completed} pages crawled` : "Extracted investment data will appear here"}
+                {scrapeData?.investments 
+                  ? `${scrapeData.investments.length} investments found from ${scrapeData.crawlStats?.completed} pages` 
+                  : "Extracted investment data will appear here"}
               </p>
             </div>
-            {crawlData && (
+            {scrapeData?.investments && scrapeData.investments.length > 0 && (
               <Button variant="outline" size="sm">
                 <FileSpreadsheet className="w-4 h-4 mr-2" />
                 Export to Excel
@@ -148,36 +151,30 @@ const Index = () => {
             )}
           </div>
 
-          {!crawlData ? (
+          {!scrapeData ? (
             <EmptyState isLoading={isScraperRunning} />
-          ) : (
-            <div className="space-y-4">
+          ) : scrapeData.investments && scrapeData.investments.length > 0 ? (
+            <>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div className="p-4 rounded-lg bg-muted">
-                  <div className="text-2xl font-bold text-primary">{crawlData.completed}</div>
+                  <div className="text-2xl font-bold text-primary">{scrapeData.investments.length}</div>
+                  <div className="text-sm text-muted-foreground">Investments Found</div>
+                </div>
+                <div className="p-4 rounded-lg bg-muted">
+                  <div className="text-2xl font-bold text-primary">{scrapeData.crawlStats?.completed}</div>
                   <div className="text-sm text-muted-foreground">Pages Crawled</div>
                 </div>
                 <div className="p-4 rounded-lg bg-muted">
-                  <div className="text-2xl font-bold text-primary">{crawlData.total}</div>
-                  <div className="text-sm text-muted-foreground">Total Pages</div>
-                </div>
-                <div className="p-4 rounded-lg bg-muted">
-                  <div className="text-2xl font-bold text-primary">{crawlData.creditsUsed}</div>
+                  <div className="text-2xl font-bold text-primary">{scrapeData.crawlStats?.creditsUsed}</div>
                   <div className="text-sm text-muted-foreground">Credits Used</div>
                 </div>
               </div>
 
-              <div className="border rounded-lg p-4 max-h-96 overflow-auto">
-                <h3 className="font-semibold mb-3">Crawled Pages</h3>
-                <div className="space-y-2">
-                  {crawlData.data?.map((page, index) => (
-                    <div key={index} className="p-3 bg-muted rounded-md">
-                      <div className="font-medium text-sm">{page.metadata?.title || "Untitled"}</div>
-                      <div className="text-xs text-muted-foreground truncate">{page.metadata?.url}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <InvestmentTable investments={scrapeData.investments} />
+            </>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              No investments found in the scraped pages. Try a different URL or ensure the page contains investment information.
             </div>
           )}
         </Card>
