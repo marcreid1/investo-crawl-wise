@@ -35,8 +35,135 @@ interface Investment {
   sourceUrl: string;
 }
 
-// Helper function to extract investment data from text
-function extractInvestmentData(page: CrawlData): Investment[] {
+// Helper function to extract investment data from HTML using CSS selectors
+function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
+  const investments: Investment[] = [];
+  
+  if (!page.html) {
+    return investments;
+  }
+
+  try {
+    // Common CSS selector patterns for investment data
+    const selectors = {
+      // Row containers
+      rows: [
+        '.investment-row',
+        '.portfolio-item',
+        '.company-card',
+        'tr.investment',
+        '[data-investment]',
+        '.portfolio-company',
+      ],
+      // Individual fields
+      name: ['.name', '.company-name', '.title', 'h2', 'h3', '.investment-name'],
+      industry: ['.industry', '.sector', '.category', '.vertical', '[data-industry]'],
+      date: ['.date', '.investment-date', '.year', 'time', '[datetime]'],
+      description: ['.description', '.summary', '.about', 'p'],
+      partners: ['.partners', '.team', '.investors', '.lead'],
+    };
+
+    // Try to find investment rows
+    let foundRows = false;
+    for (const rowSelector of selectors.rows) {
+      const pattern = new RegExp(`<[^>]*class="[^"]*${rowSelector.replace('.', '')}[^"]*"[^>]*>([\\s\\S]*?)<\\/[^>]*>`, 'gi');
+      const matches = [...page.html.matchAll(pattern)];
+      
+      if (matches.length > 0) {
+        foundRows = true;
+        console.log(`Found ${matches.length} investment rows using selector: ${rowSelector}`);
+        
+        matches.forEach(match => {
+          const rowHtml = match[0];
+          const investment: Investment = {
+            name: '',
+            sourceUrl: page.metadata?.url || "",
+          };
+
+          // Extract name
+          for (const nameSelector of selectors.name) {
+            const namePattern = new RegExp(`<[^>]*class="[^"]*${nameSelector.replace('.', '')}[^"]*"[^>]*>([^<]+)<`, 'i');
+            const nameMatch = rowHtml.match(namePattern);
+            if (nameMatch && nameMatch[1].trim()) {
+              investment.name = nameMatch[1].trim();
+              break;
+            }
+          }
+
+          // Extract industry
+          for (const industrySelector of selectors.industry) {
+            const industryPattern = new RegExp(`<[^>]*class="[^"]*${industrySelector.replace('.', '')}[^"]*"[^>]*>([^<]+)<`, 'i');
+            const industryMatch = rowHtml.match(industryPattern);
+            if (industryMatch && industryMatch[1].trim()) {
+              investment.industry = industryMatch[1].trim();
+              break;
+            }
+          }
+
+          // Extract date
+          for (const dateSelector of selectors.date) {
+            const datePattern = new RegExp(`<[^>]*class="[^"]*${dateSelector.replace('.', '')}[^"]*"[^>]*>([^<]+)<`, 'i');
+            const dateMatch = rowHtml.match(datePattern);
+            if (dateMatch && dateMatch[1].trim()) {
+              investment.date = dateMatch[1].trim();
+              break;
+            }
+          }
+
+          // Extract description
+          for (const descSelector of selectors.description) {
+            const descPattern = new RegExp(`<[^>]*class="[^"]*${descSelector.replace('.', '')}[^"]*"[^>]*>([^<]+)<`, 'i');
+            const descMatch = rowHtml.match(descPattern);
+            if (descMatch && descMatch[1].trim() && descMatch[1].trim().length > 20) {
+              investment.description = descMatch[1].trim();
+              break;
+            }
+          }
+
+          investment.portfolioUrl = page.metadata?.url;
+
+          if (investment.name) {
+            investments.push(investment);
+          }
+        });
+        
+        if (investments.length > 0) {
+          break; // Found valid data, no need to try other row selectors
+        }
+      }
+    }
+
+    // If no structured rows found, try extracting from links with common patterns
+    if (!foundRows) {
+      const linkPattern = /<a[^>]*href="([^"]*)"[^>]*>([^<]+)<\/a>/gi;
+      const links = [...page.html.matchAll(linkPattern)];
+      
+      links.forEach(link => {
+        const href = link[1];
+        const text = link[2].trim();
+        
+        // Look for investment/portfolio/company links
+        if (href && text && 
+            (href.includes('portfolio') || href.includes('investment') || href.includes('company')) &&
+            text.length > 3 && text.length < 100) {
+          investments.push({
+            name: text,
+            sourceUrl: page.metadata?.url || "",
+            portfolioUrl: href,
+          });
+        }
+      });
+    }
+
+  } catch (error) {
+    console.error('Error extracting with CSS selectors:', error);
+  }
+
+  return investments;
+}
+
+// Helper function to extract investment data from text (fallback method)
+function extractInvestmentDataFromText(page: CrawlData): Investment[] {
   const text = page.markdown || page.html || "";
   const investments: Investment[] = [];
   
@@ -149,6 +276,20 @@ function extractInvestmentData(page: CrawlData): Investment[] {
   }
 
   return investments;
+}
+
+// Main extraction function that tries HTML selectors first, then falls back to text
+function extractInvestmentData(page: CrawlData): Investment[] {
+  // Try HTML selector-based extraction first (more reliable)
+  const htmlInvestments = extractInvestmentDataFromHTML(page);
+  if (htmlInvestments.length > 0) {
+    console.log(`Extracted ${htmlInvestments.length} investments using CSS selectors`);
+    return htmlInvestments;
+  }
+
+  // Fall back to text/markdown extraction
+  console.log('No structured HTML found, using text extraction');
+  return extractInvestmentDataFromText(page);
 }
 
 // Deduplicate and merge investment data
