@@ -80,7 +80,8 @@ const Index = () => {
       const { data, error } = await supabase.functions.invoke('scrape', {
         body: { 
           url: trimmedUrl,
-          crawlDepth: settings.crawlDepth 
+          crawlDepth: settings.crawlDepth,
+          renderJs: settings.renderJs
         }
       });
 

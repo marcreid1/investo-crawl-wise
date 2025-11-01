@@ -187,7 +187,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { url, crawlDepth, depth } = await req.json();
+    const { url, crawlDepth, depth, renderJs } = await req.json();
 
     if (!url || typeof url !== "string") {
       console.error("Invalid URL provided:", url);
@@ -220,9 +220,10 @@ Deno.serve(async (req) => {
 
     console.log("Starting crawl for URL:", url);
     console.log(`Crawling with depth: ${crawlDepthValue}`);
+    console.log(`JavaScript rendering: ${renderJs ? 'enabled' : 'disabled'}`);
 
-    // Use Firecrawl v1 API format
-    const crawlRequestBody = {
+    // Use Firecrawl v1 API format with optional JS rendering
+    const crawlRequestBody: any = {
       url: url,
       limit: 100,
       scrapeOptions: {
@@ -230,6 +231,12 @@ Deno.serve(async (req) => {
       },
       maxDepth: crawlDepthValue,
     };
+
+    // Enable JavaScript rendering if requested
+    if (renderJs) {
+      crawlRequestBody.scrapeOptions.waitFor = 2000; // Wait for dynamic content
+      crawlRequestBody.scrapeOptions.mobile = false;
+    }
 
     console.log("Sending crawl request to Firecrawl API");
     const crawlInitResponse = await fetch(

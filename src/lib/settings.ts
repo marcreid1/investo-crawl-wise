@@ -5,6 +5,7 @@ export interface ScraperSettings {
   outputFormat: OutputFormat;
   crawlDepth: number;
   enableCompanyTags: boolean;
+  renderJs: boolean;
 }
 
 const SETTINGS_KEY = "investment_scraper_settings";
@@ -13,6 +14,7 @@ const DEFAULT_SETTINGS: ScraperSettings = {
   outputFormat: "excel",
   crawlDepth: 3,
   enableCompanyTags: false,
+  renderJs: true,
 };
 
 export const getSettings = (): ScraperSettings => {

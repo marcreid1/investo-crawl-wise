@@ -22,12 +22,14 @@ const Settings = () => {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("excel");
   const [crawlDepth, setCrawlDepth] = useState<number>(3);
   const [enableCompanyTags, setEnableCompanyTags] = useState(false);
+  const [renderJs, setRenderJs] = useState(true);
 
   useEffect(() => {
     const settings = getSettings();
     setOutputFormat(settings.outputFormat);
     setCrawlDepth(settings.crawlDepth);
     setEnableCompanyTags(settings.enableCompanyTags);
+    setRenderJs(settings.renderJs);
   }, []);
 
   const handleSave = () => {
@@ -35,6 +37,7 @@ const Settings = () => {
       outputFormat,
       crawlDepth,
       enableCompanyTags,
+      renderJs,
     });
     toast({
       title: "Settings saved!",
@@ -48,6 +51,7 @@ const Settings = () => {
     setOutputFormat(defaultSettings.outputFormat);
     setCrawlDepth(defaultSettings.crawlDepth);
     setEnableCompanyTags(defaultSettings.enableCompanyTags);
+    setRenderJs(defaultSettings.renderJs);
     toast({
       title: "Settings reset",
       description: "All settings have been restored to defaults.",
@@ -147,6 +151,25 @@ const Settings = () => {
                 id="company-tags"
                 checked={enableCompanyTags}
                 onCheckedChange={setEnableCompanyTags}
+              />
+            </div>
+          </div>
+
+          {/* JavaScript Rendering */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <Label htmlFor="render-js" className="text-base font-semibold">
+                  JavaScript Rendering
+                </Label>
+                <p className="text-sm text-muted-foreground">
+                  Enable headless browser mode to scrape dynamic content loaded via JavaScript
+                </p>
+              </div>
+              <Switch
+                id="render-js"
+                checked={renderJs}
+                onCheckedChange={setRenderJs}
               />
             </div>
           </div>
