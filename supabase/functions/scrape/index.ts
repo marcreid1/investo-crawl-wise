@@ -204,7 +204,6 @@ Deno.serve(async (req) => {
     const maxDepth = crawlDepth && typeof crawlDepth === "number" ? crawlDepth : 3;
 
     const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
-    console.log("FIRECRAWL_API_KEY:", apiKey);
     if (!apiKey) {
       console.error("FIRECRAWL_API_KEY not configured");
       return new Response(
