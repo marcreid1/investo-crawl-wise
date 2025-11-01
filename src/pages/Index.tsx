@@ -1,14 +1,16 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Search, Database, FileSpreadsheet, AlertCircle } from "lucide-react";
+import { Search, Database, FileSpreadsheet, AlertCircle, Settings as SettingsIcon } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { InvestmentTable } from "@/components/InvestmentTable";
 import { ScrapingHistory } from "@/components/ScrapingHistory";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { exportToExcel } from "@/utils/excelExport";
+import { exportInvestments } from "@/utils/dataExport";
+import { getSettings } from "@/lib/settings";
 
 export interface Investment {
   name: string;
@@ -32,6 +34,7 @@ interface ScrapeResponse {
 }
 
 const Index = () => {
+  const navigate = useNavigate();
   const [url, setUrl] = useState("");
   const [isScraperRunning, setIsScraperRunning] = useState(false);
   const [scrapeData, setScrapeData] = useState<ScrapeResponse | null>(null);
@@ -72,8 +75,13 @@ const Index = () => {
     setScrapeData(null);
 
     try {
+      const settings = getSettings();
+      
       const { data, error } = await supabase.functions.invoke('scrape', {
-        body: { url: trimmedUrl }
+        body: { 
+          url: trimmedUrl,
+          crawlDepth: settings.crawlDepth 
+        }
       });
 
       if (error) {
@@ -121,16 +129,20 @@ const Index = () => {
     }
 
     try {
-      exportToExcel(scrapeData.investments);
+      const settings = getSettings();
+      const formatLabel = settings.outputFormat.toUpperCase();
+      
+      exportInvestments(scrapeData.investments, settings.outputFormat);
+      
       toast({
         title: "Export successful!",
-        description: `Exported ${scrapeData.investments.length} investments to investments_data.xlsx`,
+        description: `Exported ${scrapeData.investments.length} investments as ${formatLabel}`,
       });
     } catch (error) {
       console.error("Export error:", error);
       toast({
         title: "Export failed",
-        description: error instanceof Error ? error.message : "Failed to export to Excel",
+        description: error instanceof Error ? error.message : "Failed to export data",
         variant: "destructive",
       });
     }
@@ -141,14 +153,25 @@ const Index = () => {
       {/* Header */}
       <header className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-primary shadow-elegant">
-              <Database className="w-5 h-5 text-primary-foreground" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-primary shadow-elegant">
+                <Database className="w-5 h-5 text-primary-foreground" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-foreground">Investment Scraper</h1>
+                <p className="text-sm text-muted-foreground">Extract investment data from portfolio pages</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-foreground">Investment Scraper</h1>
-              <p className="text-sm text-muted-foreground">Extract investment data from portfolio pages</p>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/settings")}
+              className="gap-2"
+            >
+              <SettingsIcon className="w-4 h-4" />
+              Settings
+            </Button>
           </div>
         </div>
       </header>
@@ -220,9 +243,9 @@ const Index = () => {
               </p>
             </div>
             {scrapeData?.investments && scrapeData.investments.length > 0 && (
-              <Button variant="outline" size="sm" onClick={handleExportToExcel} className="shadow-sm">
-                <FileSpreadsheet className="w-4 h-4 mr-2" />
-                Export to Excel
+              <Button variant="outline" size="sm" onClick={handleExportToExcel} className="shadow-sm gap-2">
+                <FileSpreadsheet className="w-4 h-4" />
+                Export Data
               </Button>
             )}
           </div>

@@ -187,7 +187,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { url } = await req.json();
+    const { url, crawlDepth } = await req.json();
 
     if (!url || typeof url !== "string") {
       console.error("Invalid URL provided:", url);
@@ -199,6 +199,9 @@ Deno.serve(async (req) => {
         }
       );
     }
+
+    // Use provided crawl depth or default to 3
+    const maxDepth = crawlDepth && typeof crawlDepth === "number" ? crawlDepth : 3;
 
     const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
     if (!apiKey) {
@@ -228,9 +231,11 @@ Deno.serve(async (req) => {
       crawlerOptions: {
         includes: ['*/investment*', '*/portfolio*', '*/companies*'],
         limit: 100,
-        maxDepth: 3,
+        maxDepth: maxDepth,
       }
     };
+
+    console.log(`Crawling with depth: ${maxDepth}`);
 
     console.log("Sending crawl request to Firecrawl API");
     const crawlInitResponse = await fetch(

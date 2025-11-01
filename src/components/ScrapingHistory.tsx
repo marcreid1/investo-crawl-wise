@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Clock, FileSpreadsheet, ExternalLink } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { exportToExcel } from "@/utils/excelExport";
+import { exportInvestments } from "@/utils/dataExport";
+import { getSettings } from "@/lib/settings";
 import type { Investment } from "@/pages/Index";
 
 interface HistoryEntry {
@@ -58,18 +59,22 @@ export const ScrapingHistory = () => {
 
   const handleExport = (entry: HistoryEntry) => {
     try {
+      const settings = getSettings();
       const timestamp = new Date(entry.created_at).toISOString().split('T')[0];
-      const filename = `investments_${timestamp}.xlsx`;
-      exportToExcel(entry.investments_data, filename);
+      const filename = `investments_${timestamp}`;
+      
+      exportInvestments(entry.investments_data, settings.outputFormat, filename);
+      
+      const formatLabel = settings.outputFormat.toUpperCase();
       toast({
         title: "Export successful!",
-        description: `Exported ${entry.investment_count} investments`,
+        description: `Exported ${entry.investment_count} investments as ${formatLabel}`,
       });
     } catch (error) {
       console.error("Export error:", error);
       toast({
         title: "Export failed",
-        description: "Could not export to Excel",
+        description: "Could not export data",
         variant: "destructive",
       });
     }
