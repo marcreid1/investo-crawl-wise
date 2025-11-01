@@ -4,6 +4,39 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+// Text cleaning utilities
+function cleanText(text: string): string {
+  if (!text) return "";
+  
+  return text
+    // Remove common page fragments
+    .replace(/Investments\s*[-–—]\s*Page\s*\d+/gi, "")
+    .replace(/Role\s*:\s*/gi, "")
+    .replace(/Investment\s*:\s*/gi, "")
+    .replace(/Portfolio\s*:\s*/gi, "")
+    .replace(/Company\s*:\s*/gi, "")
+    // Remove extra whitespace
+    .replace(/\s+/g, " ")
+    // Remove line breaks and tabs
+    .replace(/[\r\n\t]+/g, " ")
+    // Remove multiple spaces
+    .replace(/\s{2,}/g, " ")
+    // Trim
+    .trim();
+}
+
+function cleanInvestment(investment: Investment): Investment {
+  return {
+    name: cleanText(investment.name),
+    industry: investment.industry ? cleanText(investment.industry) : undefined,
+    date: investment.date ? cleanText(investment.date) : undefined,
+    description: investment.description ? cleanText(investment.description) : undefined,
+    partners: investment.partners?.map(p => cleanText(p)).filter(p => p.length > 0),
+    portfolioUrl: investment.portfolioUrl,
+    sourceUrl: investment.sourceUrl,
+  };
+}
+
 interface CrawlData {
   markdown?: string;
   html?: string;
@@ -507,7 +540,10 @@ Deno.serve(async (req) => {
 
     // Deduplicate investments
     const uniqueInvestments = deduplicateInvestments(allInvestments);
-    console.log(`Extracted ${uniqueInvestments.length} unique investments`);
+    
+    // Clean all extracted text
+    const cleanedInvestments = uniqueInvestments.map(cleanInvestment);
+    console.log(`Extracted and cleaned ${cleanedInvestments.length} unique investments`);
 
     // Save to history database in background (don't await)
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -525,10 +561,10 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify({
           url: url,
-          investment_count: uniqueInvestments.length,
+          investment_count: cleanedInvestments.length,
           pages_crawled: crawlData.completed,
           credits_used: crawlData.creditsUsed,
-          investments_data: uniqueInvestments,
+          investments_data: cleanedInvestments,
         }),
       })
       .then(res => {
@@ -549,7 +585,7 @@ Deno.serve(async (req) => {
           total: crawlData.total,
           creditsUsed: crawlData.creditsUsed,
         },
-        investments: uniqueInvestments,
+        investments: cleanedInvestments,
         rawData: crawlData.data, // Include raw data for debugging
       }),
       {

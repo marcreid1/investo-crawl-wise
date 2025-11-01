@@ -232,8 +232,9 @@ const Settings = () => {
           <ul className="text-sm text-muted-foreground space-y-1">
             <li>• Settings are saved locally in your browser</li>
             <li>• Crawl depth affects scraping time and Firecrawl credits used</li>
-            <li>• Company tagging enhances data organization</li>
-            <li>• All exports will use your selected format by default</li>
+            <li>• JavaScript rendering enables scraping of dynamic content</li>
+            <li>• Text is automatically cleaned (removes extra whitespace and fragments)</li>
+            <li>• All exports combine multi-line text into single cells</li>
           </ul>
         </Card>
       </main>

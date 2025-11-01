@@ -2,14 +2,23 @@ import * as XLSX from "xlsx";
 import type { Investment } from "@/pages/Index";
 import type { OutputFormat } from "@/lib/settings";
 
+// Clean text utility to ensure single-line, clean output
+function cleanExportText(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 // Export to Excel
 export const exportToExcel = (investments: Investment[], filename: string = "investments_data.xlsx") => {
   const excelData = investments.map((inv) => ({
-    "Investment Name": inv.name || "",
-    "Industry": inv.industry || "",
-    "Date": inv.date || "",
-    "Description": inv.description || "",
-    "Partners": inv.partners ? inv.partners.join(", ") : "",
+    "Investment Name": cleanExportText(inv.name),
+    "Industry": cleanExportText(inv.industry),
+    "Date": cleanExportText(inv.date),
+    "Description": cleanExportText(inv.description),
+    "Partners": inv.partners ? inv.partners.map(p => cleanExportText(p)).join(", ") : "",
     "Portfolio URL": inv.portfolioUrl || "",
     "Source URL": inv.sourceUrl || "",
   }));
@@ -35,11 +44,11 @@ export const exportToExcel = (investments: Investment[], filename: string = "inv
 // Export to CSV
 export const exportToCSV = (investments: Investment[], filename: string = "investments_data.csv") => {
   const csvData = investments.map((inv) => ({
-    "Investment Name": inv.name || "",
-    "Industry": inv.industry || "",
-    "Date": inv.date || "",
-    "Description": inv.description || "",
-    "Partners": inv.partners ? inv.partners.join("; ") : "",
+    "Investment Name": cleanExportText(inv.name),
+    "Industry": cleanExportText(inv.industry),
+    "Date": cleanExportText(inv.date),
+    "Description": cleanExportText(inv.description),
+    "Partners": inv.partners ? inv.partners.map(p => cleanExportText(p)).join("; ") : "",
     "Portfolio URL": inv.portfolioUrl || "",
     "Source URL": inv.sourceUrl || "",
   }));
@@ -52,7 +61,18 @@ export const exportToCSV = (investments: Investment[], filename: string = "inves
 
 // Export to JSON
 export const exportToJSON = (investments: Investment[], filename: string = "investments_data.json") => {
-  const jsonString = JSON.stringify(investments, null, 2);
+  // Clean investments before JSON export
+  const cleanedInvestments = investments.map(inv => ({
+    name: cleanExportText(inv.name),
+    industry: inv.industry ? cleanExportText(inv.industry) : undefined,
+    date: inv.date ? cleanExportText(inv.date) : undefined,
+    description: inv.description ? cleanExportText(inv.description) : undefined,
+    partners: inv.partners?.map(p => cleanExportText(p)),
+    portfolioUrl: inv.portfolioUrl,
+    sourceUrl: inv.sourceUrl,
+  }));
+  
+  const jsonString = JSON.stringify(cleanedInvestments, null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
