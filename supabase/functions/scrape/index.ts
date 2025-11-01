@@ -398,24 +398,6 @@ Deno.serve(async (req) => {
     console.log(`Maximum pages: ${maxPagesValue}`);
     console.log(`JavaScript rendering: ${renderJs ? 'enabled' : 'disabled'}`);
 
-    // Detect pagination patterns in the URL
-    const urlObj = new URL(url);
-    const hasPagination = /[?&](page|p|offset|start)=/i.test(url);
-    
-    // Common pagination patterns to follow
-    const paginationPatterns = [
-      '*?page=*',
-      '*&page=*',
-      '*?p=*',
-      '*&p=*',
-      '*/page/*',
-      '*?offset=*',
-      '*&offset=*',
-      '*/investments/*',
-      '*/portfolio/*',
-      '*/companies/*',
-    ];
-
     // Use Firecrawl v1 API format with pagination support
     const crawlRequestBody: any = {
       url: url,
@@ -424,17 +406,12 @@ Deno.serve(async (req) => {
         formats: ["markdown", "html"],
       },
       maxDepth: crawlDepthValue,
-      includePaths: paginationPatterns,
     };
 
     // Enable JavaScript rendering if requested
     if (renderJs) {
       crawlRequestBody.scrapeOptions.waitFor = 2000; // Wait for dynamic content
       crawlRequestBody.scrapeOptions.mobile = false;
-    }
-
-    if (hasPagination) {
-      console.log("Pagination detected in URL - will follow pagination links");
     }
 
     console.log("Sending crawl request to Firecrawl API");
