@@ -187,7 +187,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { url, crawlDepth, depth, renderJs } = await req.json();
+    const { url, crawlDepth, depth, renderJs, maxPages } = await req.json();
 
     if (!url || typeof url !== "string") {
       console.error("Invalid URL provided:", url);
@@ -202,6 +202,7 @@ Deno.serve(async (req) => {
 
     // Use provided depth (prefer 'depth', fallback to 'crawlDepth') or default to 2
     const crawlDepthValue = depth ?? crawlDepth ?? 2;
+    const maxPagesValue = maxPages && typeof maxPages === "number" ? maxPages : 100;
 
     const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
     if (!apiKey) {
@@ -220,22 +221,46 @@ Deno.serve(async (req) => {
 
     console.log("Starting crawl for URL:", url);
     console.log(`Crawling with depth: ${crawlDepthValue}`);
+    console.log(`Maximum pages: ${maxPagesValue}`);
     console.log(`JavaScript rendering: ${renderJs ? 'enabled' : 'disabled'}`);
 
-    // Use Firecrawl v1 API format with optional JS rendering
+    // Detect pagination patterns in the URL
+    const urlObj = new URL(url);
+    const hasPagination = /[?&](page|p|offset|start)=/i.test(url);
+    
+    // Common pagination patterns to follow
+    const paginationPatterns = [
+      '*?page=*',
+      '*&page=*',
+      '*?p=*',
+      '*&p=*',
+      '*/page/*',
+      '*?offset=*',
+      '*&offset=*',
+      '*/investments/*',
+      '*/portfolio/*',
+      '*/companies/*',
+    ];
+
+    // Use Firecrawl v1 API format with pagination support
     const crawlRequestBody: any = {
       url: url,
-      limit: 100,
+      limit: maxPagesValue,
       scrapeOptions: {
         formats: ["markdown", "html"],
       },
       maxDepth: crawlDepthValue,
+      includePaths: paginationPatterns,
     };
 
     // Enable JavaScript rendering if requested
     if (renderJs) {
       crawlRequestBody.scrapeOptions.waitFor = 2000; // Wait for dynamic content
       crawlRequestBody.scrapeOptions.mobile = false;
+    }
+
+    if (hasPagination) {
+      console.log("Pagination detected in URL - will follow pagination links");
     }
 
     console.log("Sending crawl request to Firecrawl API");

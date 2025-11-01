@@ -81,7 +81,8 @@ const Index = () => {
         body: { 
           url: trimmedUrl,
           crawlDepth: settings.crawlDepth,
-          renderJs: settings.renderJs
+          renderJs: settings.renderJs,
+          maxPages: settings.maxPages
         }
       });
 

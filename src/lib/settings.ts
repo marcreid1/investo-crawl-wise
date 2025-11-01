@@ -6,6 +6,7 @@ export interface ScraperSettings {
   crawlDepth: number;
   enableCompanyTags: boolean;
   renderJs: boolean;
+  maxPages: number;
 }
 
 const SETTINGS_KEY = "investment_scraper_settings";
@@ -15,6 +16,7 @@ const DEFAULT_SETTINGS: ScraperSettings = {
   crawlDepth: 3,
   enableCompanyTags: false,
   renderJs: true,
+  maxPages: 100,
 };
 
 export const getSettings = (): ScraperSettings => {

@@ -23,6 +23,7 @@ const Settings = () => {
   const [crawlDepth, setCrawlDepth] = useState<number>(3);
   const [enableCompanyTags, setEnableCompanyTags] = useState(false);
   const [renderJs, setRenderJs] = useState(true);
+  const [maxPages, setMaxPages] = useState<number>(100);
 
   useEffect(() => {
     const settings = getSettings();
@@ -30,6 +31,7 @@ const Settings = () => {
     setCrawlDepth(settings.crawlDepth);
     setEnableCompanyTags(settings.enableCompanyTags);
     setRenderJs(settings.renderJs);
+    setMaxPages(settings.maxPages);
   }, []);
 
   const handleSave = () => {
@@ -38,6 +40,7 @@ const Settings = () => {
       crawlDepth,
       enableCompanyTags,
       renderJs,
+      maxPages,
     });
     toast({
       title: "Settings saved!",
@@ -52,6 +55,7 @@ const Settings = () => {
     setCrawlDepth(defaultSettings.crawlDepth);
     setEnableCompanyTags(defaultSettings.enableCompanyTags);
     setRenderJs(defaultSettings.renderJs);
+    setMaxPages(defaultSettings.maxPages);
     toast({
       title: "Settings reset",
       description: "All settings have been restored to defaults.",
@@ -132,6 +136,34 @@ const Settings = () => {
                 <span>1 (Shallow)</span>
                 <span>3 (Balanced)</span>
                 <span>5 (Deep)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Max Pages */}
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="max-pages" className="text-base font-semibold">
+                Maximum Pages: {maxPages}
+              </Label>
+              <p className="text-sm text-muted-foreground mt-1">
+                Maximum number of pages to scrape, including paginated results (10-200)
+              </p>
+            </div>
+            <div className="px-2">
+              <Slider
+                id="max-pages"
+                min={10}
+                max={200}
+                step={10}
+                value={[maxPages]}
+                onValueChange={(value) => setMaxPages(value[0])}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground mt-2">
+                <span>10 (Quick)</span>
+                <span>100 (Balanced)</span>
+                <span>200 (Exhaustive)</span>
               </div>
             </div>
           </div>
