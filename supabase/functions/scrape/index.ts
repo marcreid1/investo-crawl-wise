@@ -337,6 +337,38 @@ Deno.serve(async (req) => {
     const uniqueInvestments = deduplicateInvestments(allInvestments);
     console.log(`Extracted ${uniqueInvestments.length} unique investments`);
 
+    // Save to history database in background (don't await)
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    
+    if (supabaseUrl && supabaseKey) {
+      // Fire and forget - save history without blocking response
+      fetch(`${supabaseUrl}/rest/v1/scraping_history`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": supabaseKey,
+          "Authorization": `Bearer ${supabaseKey}`,
+          "Prefer": "return=minimal",
+        },
+        body: JSON.stringify({
+          url: url,
+          investment_count: uniqueInvestments.length,
+          pages_crawled: crawlData.completed,
+          credits_used: crawlData.creditsUsed,
+          investments_data: uniqueInvestments,
+        }),
+      })
+      .then(res => {
+        if (!res.ok) {
+          console.error("Failed to save history:", res.status);
+        } else {
+          console.log("History saved successfully");
+        }
+      })
+      .catch(err => console.error("Error saving history:", err));
+    }
+
     return new Response(
       JSON.stringify({
         success: true,

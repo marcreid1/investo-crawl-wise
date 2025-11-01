@@ -14,7 +14,36 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      scraping_history: {
+        Row: {
+          created_at: string
+          credits_used: number
+          id: string
+          investment_count: number
+          investments_data: Json
+          pages_crawled: number
+          url: string
+        }
+        Insert: {
+          created_at?: string
+          credits_used?: number
+          id?: string
+          investment_count?: number
+          investments_data?: Json
+          pages_crawled?: number
+          url: string
+        }
+        Update: {
+          created_at?: string
+          credits_used?: number
+          id?: string
+          investment_count?: number
+          investments_data?: Json
+          pages_crawled?: number
+          url?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

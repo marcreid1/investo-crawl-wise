@@ -2,11 +2,13 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Search, Database, FileSpreadsheet } from "lucide-react";
+import { Search, Database, FileSpreadsheet, AlertCircle } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { InvestmentTable } from "@/components/InvestmentTable";
+import { ScrapingHistory } from "@/components/ScrapingHistory";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { exportToExcel } from "@/utils/excelExport";
 
 export interface Investment {
   name: string;
@@ -35,15 +37,43 @@ const Index = () => {
   const [scrapeData, setScrapeData] = useState<ScrapeResponse | null>(null);
   const { toast } = useToast();
 
+  // Validate URL
+  const isValidUrl = (urlString: string): boolean => {
+    try {
+      const url = new URL(urlString);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  };
+
   const handleStartScraping = async () => {
-    if (!url.trim()) return;
+    const trimmedUrl = url.trim();
+    
+    if (!trimmedUrl) {
+      toast({
+        title: "Invalid URL",
+        description: "Please enter a valid portfolio page URL",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!isValidUrl(trimmedUrl)) {
+      toast({
+        title: "Invalid URL format",
+        description: "Please enter a complete URL starting with http:// or https://",
+        variant: "destructive",
+      });
+      return;
+    }
     
     setIsScraperRunning(true);
     setScrapeData(null);
 
     try {
       const { data, error } = await supabase.functions.invoke('scrape', {
-        body: { url: url.trim() }
+        body: { url: trimmedUrl }
       });
 
       if (error) {
@@ -52,18 +82,27 @@ const Index = () => {
 
       if (data?.success) {
         setScrapeData(data);
-        toast({
-          title: "Success!",
-          description: `Extracted ${data.investments?.length || 0} investments from ${data.crawlStats?.completed || 0} pages`,
-        });
+        
+        if (data.investments && data.investments.length > 0) {
+          toast({
+            title: "✅ Scraping Complete!",
+            description: `Extracted ${data.investments.length} investments from ${data.crawlStats?.completed || 0} pages`,
+          });
+        } else {
+          toast({
+            title: "No investments found",
+            description: "The page was scraped successfully, but no investment data was found. Try a different URL.",
+            variant: "destructive",
+          });
+        }
       } else {
         throw new Error(data?.error || "Failed to scrape website");
       }
     } catch (error) {
       console.error("Scraping error:", error);
       toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to scrape website",
+        title: "Scraping failed",
+        description: error instanceof Error ? error.message : "Failed to scrape website. Please check the URL and try again.",
         variant: "destructive",
       });
     } finally {
@@ -82,7 +121,6 @@ const Index = () => {
     }
 
     try {
-      const { exportToExcel } = require("@/utils/excelExport");
       exportToExcel(scrapeData.investments);
       toast({
         title: "Export successful!",
@@ -101,10 +139,10 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-gradient-subtle">
       {/* Header */}
-      <header className="border-b bg-card/50 backdrop-blur-sm">
+      <header className="border-b bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-primary">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-primary shadow-elegant">
               <Database className="w-5 h-5 text-primary-foreground" />
             </div>
             <div>
@@ -117,6 +155,9 @@ const Index = () => {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
+        {/* History Section */}
+        <ScrapingHistory />
+
         {/* Input Section */}
         <Card className="p-6 shadow-elegant mb-8">
           <div className="space-y-4">
@@ -133,6 +174,11 @@ const Index = () => {
                     placeholder="https://example.com/investments"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !isScraperRunning && url.trim()) {
+                        handleStartScraping();
+                      }
+                    }}
                     className="pl-10"
                     disabled={isScraperRunning}
                   />
@@ -140,7 +186,7 @@ const Index = () => {
                 <Button 
                   onClick={handleStartScraping}
                   disabled={!url.trim() || isScraperRunning}
-                  className="bg-gradient-primary hover:opacity-90 transition-opacity"
+                  className="bg-gradient-primary hover:opacity-90 transition-opacity shadow-elegant"
                 >
                   {isScraperRunning ? (
                     <>
@@ -153,9 +199,12 @@ const Index = () => {
                 </Button>
               </div>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Enter the URL of a company's investments or portfolio page to extract investment data.
-            </p>
+            <div className="flex items-start gap-2 text-sm text-muted-foreground">
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <p>
+                Enter the URL of a company's investments or portfolio page. The scraper will automatically crawl linked pages to extract investment data.
+              </p>
+            </div>
           </div>
         </Card>
 
@@ -171,7 +220,7 @@ const Index = () => {
               </p>
             </div>
             {scrapeData?.investments && scrapeData.investments.length > 0 && (
-              <Button variant="outline" size="sm" onClick={handleExportToExcel}>
+              <Button variant="outline" size="sm" onClick={handleExportToExcel} className="shadow-sm">
                 <FileSpreadsheet className="w-4 h-4 mr-2" />
                 Export to Excel
               </Button>
@@ -183,15 +232,15 @@ const Index = () => {
           ) : scrapeData.investments && scrapeData.investments.length > 0 ? (
             <>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                <div className="p-4 rounded-lg bg-muted">
+                <div className="p-4 rounded-lg bg-gradient-subtle border shadow-sm">
                   <div className="text-2xl font-bold text-primary">{scrapeData.investments.length}</div>
                   <div className="text-sm text-muted-foreground">Investments Found</div>
                 </div>
-                <div className="p-4 rounded-lg bg-muted">
+                <div className="p-4 rounded-lg bg-gradient-subtle border shadow-sm">
                   <div className="text-2xl font-bold text-primary">{scrapeData.crawlStats?.completed}</div>
                   <div className="text-sm text-muted-foreground">Pages Crawled</div>
                 </div>
-                <div className="p-4 rounded-lg bg-muted">
+                <div className="p-4 rounded-lg bg-gradient-subtle border shadow-sm">
                   <div className="text-2xl font-bold text-primary">{scrapeData.crawlStats?.creditsUsed}</div>
                   <div className="text-sm text-muted-foreground">Credits Used</div>
                 </div>
@@ -200,8 +249,11 @@ const Index = () => {
               <InvestmentTable investments={scrapeData.investments} />
             </>
           ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              No investments found in the scraped pages. Try a different URL or ensure the page contains investment information.
+            <div className="text-center py-8">
+              <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground">
+                No investments found in the scraped pages. Try a different URL or ensure the page contains investment information.
+              </p>
             </div>
           )}
         </Card>
