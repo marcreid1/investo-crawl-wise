@@ -243,7 +243,7 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
                 filteredAndSortedInvestments.map((investment, index) => (
                   <TableRow key={index} className="hover:bg-muted/50 transition-colors">
                     <TableCell className="font-medium max-w-xs">
-                      {investment.name}
+                      {investment.name.replace(' - Ironbridge Equity Partners', '').replace('- Ironbridge Equity Partners', '')}
                     </TableCell>
                     <TableCell>
                       {investment.industry ? (
