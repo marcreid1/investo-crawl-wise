@@ -28,10 +28,9 @@ function cleanText(text: string): string {
 function cleanInvestmentName(name: string): string {
   if (!name) return "";
   
-  // Remove common suffixes like "– Ironbridge Equity Partners" or "- Company Name"
+  // Remove "– Ironbridge Equity Partners" suffix
   return name
-    .replace(/\s*[-–—|]\s*Ironbridge\s+Equity\s+Partners\s*$/i, "")
-    .replace(/\s*[-–—|]\s*[^-–—|]{0,50}$/i, "") // Remove trailing suffix after dash
+    .replace(/\s*[-–—]\s*Ironbridge\s+Equity\s+Partners\s*$/i, "")
     .trim();
 }
 
