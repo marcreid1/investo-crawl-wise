@@ -985,10 +985,8 @@ Deno.serve(async (req) => {
             },
             body: JSON.stringify({
               url: pageUrl,
-              formats: ["extract"],
-              extract: {
-                schema: extractionSchema,
-              },
+              mode: "structured",
+              schema: extractionSchema,
             }),
           }
         );
@@ -1003,21 +1001,27 @@ Deno.serve(async (req) => {
         const scrapeData = await scrapeResponse.json();
         console.log(`Firecrawl response for ${pageUrl}:`, JSON.stringify(scrapeData).substring(0, 500));
         
-        if (scrapeData.success && scrapeData.extract) {
-          const extracted = scrapeData.extract;
-          console.log(`Extracted data:`, JSON.stringify(extracted));
+        const extracted =
+          (scrapeData && (scrapeData as any).extract) ||
+          (scrapeData && (scrapeData as any).data && (scrapeData as any).data.extract) ||
+          (Array.isArray((scrapeData as any)?.data) ? (scrapeData as any).data[0]?.extract : undefined) ||
+          (Array.isArray(scrapeData) ? (scrapeData as any)[0]?.extract : undefined);
+
+        if ((scrapeData as any)?.success !== false && extracted) {
+          const e = extracted as any;
+          console.log(`Extracted data:`, JSON.stringify(e));
           
           // Map the structured data to our Investment type
           const investment: Investment = {
-            name: cleanInvestmentName(extracted.company_name || ""),
-            industry: extracted.industry,
-            ceo: extracted.ceo,
-            investmentRole: extracted.investment_role,
-            ownership: extracted.ownership,
-            year: extracted.year_of_initial_investment,
-            location: extracted.location,
-            website: extracted.website,
-            status: extracted.status,
+            name: cleanInvestmentName(e.company_name || ""),
+            industry: e.industry,
+            ceo: e.ceo,
+            investmentRole: e.investment_role,
+            ownership: e.ownership,
+            year: e.year_of_initial_investment,
+            location: e.location,
+            website: e.website,
+            status: e.status,
             sourceUrl: pageUrl,
             portfolioUrl: pageUrl,
           };
@@ -1026,9 +1030,12 @@ Deno.serve(async (req) => {
             allInvestments.push(investment);
             successfulPages++;
             console.log(`Successfully extracted: ${investment.name}`);
+          } else {
+            console.warn(`Extraction returned empty name for ${pageUrl}`);
+            failedPages++;
           }
         } else {
-          console.warn(`No structured data extracted from ${pageUrl}`);
+          console.warn(`No structured data extracted from ${pageUrl}. Keys: ${Object.keys(scrapeData || {}).join(', ')}`);
           failedPages++;
         }
       } catch (error) {
