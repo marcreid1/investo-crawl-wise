@@ -1001,9 +1001,11 @@ Deno.serve(async (req) => {
         }
 
         const scrapeData = await scrapeResponse.json();
+        console.log(`Firecrawl response for ${pageUrl}:`, JSON.stringify(scrapeData).substring(0, 500));
         
         if (scrapeData.success && scrapeData.extract) {
           const extracted = scrapeData.extract;
+          console.log(`Extracted data:`, JSON.stringify(extracted));
           
           // Map the structured data to our Investment type
           const investment: Investment = {
