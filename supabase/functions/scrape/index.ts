@@ -105,42 +105,71 @@ interface Investment {
   sourceUrl: string;
 }
 
-// Helper to harvest detail page links from listing page HTML
-function harvestDetailLinksFromHTML(html: string, baseUrl: string, maxPages: number = 50): string[] {
-  if (!html) return [];
+// Helper to harvest detail page links from listing page HTML (internal + external)
+function harvestDetailLinksFromHTML(html: string, baseUrl: string, maxPages: number = 50): { internal: string[], external: string[] } {
+  if (!html) return { internal: [], external: [] };
   
-  const links = new Set<string>();
-  const hrefRegex = /href="([^"]+)"/gi;
+  const internalLinks = new Set<string>();
+  const externalLinks = new Set<string>();
+  const base = new URL(baseUrl);
+  
+  // Match anchor tags with href and innerText
+  const anchorPattern = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
   let match;
   
-  while ((match = hrefRegex.exec(html)) !== null) {
-    const href = match[1];
-    
-    // Look for URLs that match detail page patterns
-    if (/\/(portfolio|investments|companies?)\/[^\/\s#?]+\/?$/i.test(href)) {
-      try {
-        // Convert to absolute URL
-        const absoluteUrl = new URL(href, baseUrl).toString();
-        
-        // Don't include the base listing page itself
-        if (!absoluteUrl.endsWith('/portfolio') && 
-            !absoluteUrl.endsWith('/portfolio/') &&
-            !absoluteUrl.endsWith('/investments') &&
-            !absoluteUrl.endsWith('/investments/') &&
-            !absoluteUrl.endsWith('/companies') &&
-            !absoluteUrl.endsWith('/companies/')) {
-          links.add(absoluteUrl);
-        }
-      } catch (e) {
-        // Invalid URL, skip
+  while ((match = anchorPattern.exec(html)) !== null) {
+    try {
+      const href = match[1];
+      const innerText = match[2].trim();
+      
+      // Build absolute URL
+      let absoluteUrl: string;
+      if (href.startsWith('http://') || href.startsWith('https://')) {
+        absoluteUrl = href;
+      } else if (href.startsWith('/')) {
+        absoluteUrl = `${base.origin}${href}`;
+      } else {
+        continue; // Skip relative paths
       }
+      
+      const url = new URL(absoluteUrl);
+      const cleanUrl = absoluteUrl.split('#')[0].split('?')[0]; // Remove hash and query
+      
+      // Internal detail pages (same domain)
+      if (url.origin === base.origin) {
+        const path = url.pathname.toLowerCase();
+        // Match /portfolio/slug, /investments/slug, /company/slug, /companies/slug
+        if (/\/(portfolio|investments|companies?)\/[^\/#?]+\/?$/i.test(path)) {
+          // Exclude root listing pages
+          if (!path.match(/\/(portfolio|investments|companies?)\/?$/i)) {
+            internalLinks.add(cleanUrl);
+          }
+        }
+      } else {
+        // External company links (off-domain)
+        // Heuristics: Title Case name, 2-4 words, < 60 chars, not common nav links
+        const words = innerText.split(/\s+/).filter(w => w.length > 0);
+        const isTitleCase = words.every(w => /^[A-Z]/.test(w));
+        const isPlausibleCompanyName = words.length >= 2 && words.length <= 4 && innerText.length < 60;
+        const isNotNav = !/(home|about|contact|news|blog|login|sign|privacy|terms)/i.test(innerText);
+        
+        if (isTitleCase && isPlausibleCompanyName && isNotNav) {
+          externalLinks.add(cleanUrl);
+        }
+      }
+    } catch (e) {
+      // Invalid URL, skip
     }
     
-    if (links.size >= maxPages) break;
+    if (internalLinks.size + externalLinks.size >= maxPages) break;
   }
   
-  const result = Array.from(links).slice(0, maxPages);
-  console.log(`Harvested ${result.length} potential detail page links from ${baseUrl}`);
+  const result = {
+    internal: Array.from(internalLinks).slice(0, maxPages),
+    external: Array.from(externalLinks).slice(0, Math.floor(maxPages / 2)) // Limit externals to half
+  };
+  
+  console.log(`Harvested ${result.internal.length} internal and ${result.external.length} external links from ${baseUrl}`);
   return result;
 }
 
@@ -1119,12 +1148,16 @@ Deno.serve(async (req) => {
 
     // First, crawl to discover all investment pages
     console.log("Step 1: Discovering investment pages...");
+    console.log(`JS-friendly options: onlyMainContent=true, waitFor=2000ms, timeout=25000ms`);
     const crawlRequestBody: any = {
       url: url,
       limit: maxPagesValue,
       maxDepth: crawlDepthValue,
       scrapeOptions: {
-        formats: ["markdown"],
+        formats: ["markdown", "html"],
+        onlyMainContent: true,
+        waitFor: 2000,
+        timeout: 25000,
       },
     };
 
@@ -1346,10 +1379,13 @@ Deno.serve(async (req) => {
             },
             body: JSON.stringify({
               url: pageUrl,
-              formats: ["extract", "markdown"],
+              formats: ["extract", "markdown", "html"],
               extract: {
                 schema: schemaToUse,
               },
+              onlyMainContent: true,
+              waitFor: 2000,
+              timeout: 25000,
             }),
           }
         );
@@ -1396,6 +1432,9 @@ Deno.serve(async (req) => {
                   body: JSON.stringify({
                     url: pageUrl,
                     formats: ["markdown", "html"],
+                    onlyMainContent: true,
+                    waitFor: 2000,
+                    timeout: 25000,
                   }),
                 }
               );
@@ -1424,13 +1463,15 @@ Deno.serve(async (req) => {
             // If this is a listing page and we got few results, try harvesting detail links
             if (!isDetailPage(pageUrl) && fallbackInvestments.length < 3 && fallbackHtml) {
               console.log(`Listing page returned only ${fallbackInvestments.length} investments, attempting to harvest detail links...`);
-              const harvestedLinks = harvestDetailLinksFromHTML(fallbackHtml, pageUrl, maxPages);
+              const harvested = harvestDetailLinksFromHTML(fallbackHtml, pageUrl, maxPagesValue);
               
-              if (harvestedLinks.length > 0) {
-                console.log(`Harvested ${harvestedLinks.length} detail page links, extracting from each...`);
+              console.log(`Harvested ${harvested.internal.length} internal links, ${harvested.external.length} external links`);
+              
+              if (harvested.internal.length > 0) {
+                console.log(`Processing ${harvested.internal.length} internal detail page links...`);
                 
-                // Extract from each harvested detail page
-                for (const detailUrl of harvestedLinks) {
+                // Extract from each harvested internal detail page
+                for (const detailUrl of harvested.internal) {
                   try {
                     const detailResponse = await fetch(
                       "https://api.firecrawl.dev/v1/scrape",
@@ -1442,10 +1483,13 @@ Deno.serve(async (req) => {
                         },
                         body: JSON.stringify({
                           url: detailUrl,
-                          formats: ["extract"],
+                          formats: ["extract", "markdown", "html"],
                           extract: {
                             schema: singleExtractionSchema,
                           },
+                          onlyMainContent: true,
+                          waitFor: 2000,
+                          timeout: 25000,
                         }),
                       }
                     );
@@ -1470,11 +1514,67 @@ Deno.serve(async (req) => {
                         };
                         
                         fallbackInvestments.push(investment);
-                        console.log(`  Harvested: ${investment.name} from ${detailUrl}`);
+                        console.log(`  Harvested internal: ${investment.name} from ${detailUrl}`);
                       }
                     }
                   } catch (detailError) {
-                    console.error(`Failed to extract from harvested detail page ${detailUrl}:`, detailError);
+                    console.error(`Failed to extract from harvested internal detail page ${detailUrl}:`, detailError);
+                  }
+                }
+              }
+              
+              // Process external company sites (lightweight extraction)
+              if (harvested.external.length > 0) {
+                console.log(`Processing ${harvested.external.length} external company sites (lightweight extraction)...`);
+                
+                for (const externalUrl of harvested.external) {
+                  try {
+                    const externalResponse = await fetch(
+                      "https://api.firecrawl.dev/v1/scrape",
+                      {
+                        method: "POST",
+                        headers: {
+                          Authorization: `Bearer ${apiKey}`,
+                          "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                          url: externalUrl,
+                          formats: ["markdown", "html"],
+                          onlyMainContent: true,
+                          waitFor: 1500,
+                          timeout: 20000,
+                        }),
+                      }
+                    );
+                    
+                    if (externalResponse.ok) {
+                      const externalData = await externalResponse.json();
+                      const externalMarkdown = externalData?.data?.markdown || externalData?.markdown || "";
+                      const externalHtml = externalData?.data?.html || externalData?.html || "";
+                      
+                      // Extract basic info from external site
+                      const titleMatch = externalHtml.match(/<title>([^<]+)<\/title>/i);
+                      const metaDescMatch = externalHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+                      const h1Match = externalHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+                      
+                      const name = (h1Match?.[1] || titleMatch?.[1] || "").trim();
+                      const description = metaDescMatch?.[1] || externalMarkdown.split('\n').find((line: string) => line.length > 50 && line.length < 300)?.trim();
+                      
+                      if (name) {
+                        const investment: Investment = {
+                          name: cleanInvestmentName(name),
+                          website: externalUrl,
+                          description: description,
+                          sourceUrl: pageUrl,
+                          portfolioUrl: pageUrl,
+                        };
+                        
+                        fallbackInvestments.push(investment);
+                        console.log(`  Harvested external: ${investment.name} from ${externalUrl}`);
+                      }
+                    }
+                  } catch (externalError) {
+                    console.error(`Failed to extract from external site ${externalUrl}:`, externalError);
                   }
                 }
               }
@@ -1487,13 +1587,16 @@ Deno.serve(async (req) => {
               investment.portfolioUrl = pageUrl;
               
               const validation = validateInvestment(investment);
-              console.log(`  - ${investment.name}: ${validation.confidence}% confidence (fallback-markdown)`);
+              const method = investment.website && !investment.website.includes(new URL(pageUrl).hostname) 
+                ? 'harvested-external' 
+                : 'fallback-markdown';
+              console.log(`  - ${investment.name}: ${validation.confidence}% confidence (${method})`);
               
               validationResults.push({
                 name: investment.name,
                 confidence: validation.confidence,
                 missing: validation.missing,
-                method: 'fallback-markdown'
+                method: method
               });
               
               if (investment.name) {
@@ -1614,9 +1717,121 @@ Deno.serve(async (req) => {
 
     console.log(`Extraction summary: ${successfulPages} successful, ${failedPages} failed`);
     
+    // FINAL GLOBAL FALLBACK: If we still have zero investments, force one last pass
+    if (allInvestments.length === 0) {
+      console.warn(`Zero investments extracted - triggering final global fallback on ${url}`);
+      
+      try {
+        const finalFallbackResponse = await fetch(
+          "https://api.firecrawl.dev/v1/scrape",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              url: url,
+              formats: ["markdown", "html"],
+              onlyMainContent: true,
+              waitFor: 2000,
+              timeout: 25000,
+            }),
+          }
+        );
+        
+        if (finalFallbackResponse.ok) {
+          const finalData = await finalFallbackResponse.json();
+          const finalMarkdown = finalData?.data?.markdown || finalData?.markdown || "";
+          const finalHtml = finalData?.data?.html || finalData?.html || "";
+          
+          console.log(`Final fallback: fetched ${finalMarkdown.length} chars markdown, ${finalHtml.length} chars HTML`);
+          
+          // Try harvesting links again
+          if (finalHtml) {
+            const finalHarvested = harvestDetailLinksFromHTML(finalHtml, url, maxPagesValue);
+            console.log(`Final harvest: ${finalHarvested.internal.length} internal, ${finalHarvested.external.length} external links`);
+            
+            // Try extracting from harvested links
+            for (const link of [...finalHarvested.internal, ...finalHarvested.external].slice(0, 10)) {
+              try {
+                const linkResponse = await fetch(
+                  "https://api.firecrawl.dev/v1/scrape",
+                  {
+                    method: "POST",
+                    headers: {
+                      Authorization: `Bearer ${apiKey}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                      url: link,
+                      formats: ["markdown", "html"],
+                      onlyMainContent: true,
+                      waitFor: 1500,
+                      timeout: 20000,
+                    }),
+                  }
+                );
+                
+                if (linkResponse.ok) {
+                  const linkData = await linkResponse.json();
+                  const linkMarkdown = linkData?.data?.markdown || linkData?.markdown || "";
+                  const linkHtml = linkData?.data?.html || linkData?.html || "";
+                  
+                  const pageData = {
+                    markdown: linkMarkdown,
+                    html: linkHtml,
+                    metadata: { sourceURL: link, url: link }
+                  };
+                  
+                  const extractedFromLink = extractInvestmentData(pageData);
+                  if (extractedFromLink.length > 0) {
+                    extractedFromLink.forEach(inv => {
+                      inv.sourceUrl = url;
+                      inv.portfolioUrl = url;
+                      allInvestments.push(inv);
+                    });
+                    console.log(`Final fallback extracted ${extractedFromLink.length} from ${link}`);
+                  }
+                }
+              } catch (linkError) {
+                console.error(`Final fallback link extraction error for ${link}:`, linkError);
+              }
+            }
+          }
+          
+          // If still empty, create minimal entry from page title
+          if (allInvestments.length === 0) {
+            const titleMatch = finalHtml.match(/<title>([^<]+)<\/title>/i);
+            const metaDescMatch = finalHtml.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+            
+            if (titleMatch?.[1]) {
+              console.log("Creating minimal entry from page title as last resort");
+              allInvestments.push({
+                name: cleanInvestmentName(titleMatch[1]),
+                description: metaDescMatch?.[1],
+                sourceUrl: url,
+                portfolioUrl: url,
+              });
+              
+              validationResults.push({
+                name: titleMatch[1],
+                confidence: 20,
+                missing: ['industry', 'ceo', 'year', 'location', 'website'],
+                method: 'global-fallback-title'
+              });
+            }
+          }
+        }
+      } catch (finalError) {
+        console.error("Final global fallback failed:", finalError);
+      }
+    }
+    
     // Calculate extraction method statistics
     const aiExtractions = validationResults.filter(v => v.method?.startsWith('ai-'));
     const fallbackExtractions = validationResults.filter(v => v.method === 'fallback-markdown');
+    const harvestedExtractions = validationResults.filter(v => v.method?.includes('harvested'));
     const avgAiConfidence = aiExtractions.length > 0
       ? Math.round(aiExtractions.reduce((sum, v) => sum + v.confidence, 0) / aiExtractions.length)
       : 0;
@@ -1629,13 +1844,11 @@ Deno.serve(async (req) => {
       ? Math.round(validationResults.reduce((sum, v) => sum + v.confidence, 0) / validationResults.length)
       : 0;
     
-    if (aiExtractions.length > 0 && fallbackExtractions.length > 0) {
-      console.log(`Extraction methods: ${aiExtractions.length} AI (avg ${avgAiConfidence}%), ${fallbackExtractions.length} markdown fallback (avg ${avgFallbackConfidence}%)`);
-    } else if (aiExtractions.length > 0) {
-      console.log(`Extraction methods: ${aiExtractions.length} AI (avg ${avgAiConfidence}%)`);
-    } else if (fallbackExtractions.length > 0) {
-      console.log(`Extraction methods: ${fallbackExtractions.length} markdown fallback (avg ${avgFallbackConfidence}%)`);
-    }
+    console.log(`Extraction methods breakdown:`);
+    console.log(`  AI: ${aiExtractions.length} (avg ${avgAiConfidence}%)`);
+    console.log(`  Markdown fallback: ${fallbackExtractions.length} (avg ${avgFallbackConfidence}%)`);
+    console.log(`  Harvested (internal+external): ${harvestedExtractions.length}`);
+    console.log(`  Total validations: ${validationResults.length}`);
     console.log(`Overall average extraction confidence: ${avgConfidence}%`);
     
     const incompleteInvestments = validationResults.filter(v => v.confidence < 70).length;
@@ -1673,6 +1886,7 @@ Deno.serve(async (req) => {
         extractionMethods: {
           ai: aiExtractions.length,
           fallbackMarkdown: fallbackExtractions.length,
+          harvested: harvestedExtractions.length,
           aiAvgConfidence: avgAiConfidence,
           fallbackAvgConfidence: avgFallbackConfidence
         }
