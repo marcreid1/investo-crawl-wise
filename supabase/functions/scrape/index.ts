@@ -25,12 +25,29 @@ function cleanText(text: string): string {
     .trim();
 }
 
+function cleanInvestmentName(name: string): string {
+  if (!name) return "";
+  
+  // Remove common suffixes like "– Ironbridge Equity Partners" or "- Company Name"
+  return name
+    .replace(/\s*[-–—|]\s*Ironbridge\s+Equity\s+Partners\s*$/i, "")
+    .replace(/\s*[-–—|]\s*[^-–—|]{0,50}$/i, "") // Remove trailing suffix after dash
+    .trim();
+}
+
 function cleanInvestment(investment: Investment): Investment {
   return {
-    name: cleanText(investment.name),
+    name: cleanInvestmentName(investment.name),
     industry: investment.industry ? cleanText(investment.industry) : undefined,
     date: investment.date ? cleanText(investment.date) : undefined,
+    year: investment.year ? cleanText(investment.year) : undefined,
     description: investment.description ? cleanText(investment.description) : undefined,
+    ceo: investment.ceo ? cleanText(investment.ceo) : undefined,
+    investmentRole: investment.investmentRole ? cleanText(investment.investmentRole) : undefined,
+    ownership: investment.ownership ? cleanText(investment.ownership) : undefined,
+    location: investment.location ? cleanText(investment.location) : undefined,
+    website: investment.website ? cleanText(investment.website) : undefined,
+    status: investment.status ? cleanText(investment.status) : undefined,
     partners: investment.partners?.map(p => cleanText(p)).filter(p => p.length > 0),
     portfolioUrl: investment.portfolioUrl,
     sourceUrl: investment.sourceUrl,
@@ -62,7 +79,14 @@ interface Investment {
   name: string;
   industry?: string;
   date?: string;
+  year?: string;
   description?: string;
+  ceo?: string;
+  investmentRole?: string;
+  ownership?: string;
+  location?: string;
+  website?: string;
+  status?: string;
   partners?: string[];
   portfolioUrl?: string;
   sourceUrl: string;
@@ -92,7 +116,7 @@ function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
       console.log(`Detected single investment page, extracting from full content`);
       
       const investment: Investment = {
-        name: pageTitle.replace(/\s*[-|]\s*.*/g, '').trim(),
+        name: cleanInvestmentName(pageTitle),
         sourceUrl: pageUrl,
         portfolioUrl: pageUrl,
       };
@@ -107,11 +131,60 @@ function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
         console.log(`Found industry: ${investment.industry}`);
       }
       
+      // Look for CEO
+      const ceoMatches = htmlText.match(/<(?:div|span|p)[^>]*(?:class|id)="[^"]*(?:ceo|president|executive)[^"]*"[^>]*>([^<]+)<|(?:CEO|President|Chief Executive)[\s:]+<[^>]*>([^<]+)</i);
+      if (ceoMatches) {
+        investment.ceo = (ceoMatches[1] || ceoMatches[2] || '').trim();
+        console.log(`Found CEO: ${investment.ceo}`);
+      }
+      
+      // Look for Investment Role
+      const roleMatches = htmlText.match(/(?:Ironbridge\s+Investment\s+Role|Investment\s+Role|Role)[\s:]+([A-Za-z\s]+(?:Investor|Partner|Lead))/i);
+      if (roleMatches) {
+        investment.investmentRole = roleMatches[1].trim();
+        console.log(`Found investment role: ${investment.investmentRole}`);
+      }
+      
+      // Look for Ownership
+      const ownershipMatches = htmlText.match(/(?:Ironbridge\s+Ownership|Ownership)[\s:]+([A-Za-z\s]+(?:Control|Minority|Majority))/i);
+      if (ownershipMatches) {
+        investment.ownership = ownershipMatches[1].trim();
+        console.log(`Found ownership: ${investment.ownership}`);
+      }
+      
       // Look for date/year anywhere
       const dateMatches = htmlText.match(/<(?:div|span|p|time)[^>]*(?:class|id)="[^"]*(?:date|year|invested)[^"]*"[^>]*>([^<]+)<|(?:Date|Year|Invested)[\s:]+<[^>]*>([^<]+)<|(?:Acquired|Investment Date)[\s:]+([0-9]{4}|[A-Za-z]+\s+[0-9]{4})/i);
       if (dateMatches) {
         investment.date = (dateMatches[1] || dateMatches[2] || dateMatches[3] || '').trim();
         console.log(`Found date: ${investment.date}`);
+      }
+      
+      // Look for Year of Initial Investment
+      const yearMatches = htmlText.match(/(?:Year\s+of\s+Initial\s+Investment|Investment\s+Year)[\s:]+(\d{4})/i);
+      if (yearMatches) {
+        investment.year = yearMatches[1].trim();
+        console.log(`Found year: ${investment.year}`);
+      }
+      
+      // Look for Location
+      const locationMatches = htmlText.match(/(?:Location|Headquarters|Address)[\s:]+([A-Za-z\s,]+(?:ON|QC|BC|AB|MB|SK|NS|NB|PE|NL|YT|NT|NU|Canada|USA|United States))/i);
+      if (locationMatches) {
+        investment.location = locationMatches[1].trim();
+        console.log(`Found location: ${investment.location}`);
+      }
+      
+      // Look for Website
+      const websiteMatches = htmlText.match(/(?:Website|URL|Web|Link)[\s:]+<a[^>]*href="([^"]+)"|(?:Website|URL)[\s:]+([a-z]+:\/\/[^\s<]+)/i);
+      if (websiteMatches) {
+        investment.website = (websiteMatches[1] || websiteMatches[2] || '').trim();
+        console.log(`Found website: ${investment.website}`);
+      }
+      
+      // Look for Status
+      const statusMatches = htmlText.match(/(?:Status|Investment\s+Status)[\s:]+([A-Za-z\s]+(?:Current|Exited|Active|Past))/i);
+      if (statusMatches) {
+        investment.status = statusMatches[1].trim();
+        console.log(`Found status: ${investment.status}`);
       }
       
       // Extract description from meta or first paragraph
@@ -322,7 +395,7 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       console.log(`Single investment page detected, extracting full details`);
       
       const investment: Investment = {
-        name: pageTitle.replace(/\s*[-|–—]\s*.*/g, '').trim(),
+        name: cleanInvestmentName(pageTitle),
         sourceUrl: pageUrl,
         portfolioUrl: pageUrl,
       };
@@ -343,6 +416,51 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
         }
       }
       
+      // Extract CEO
+      const ceoPatterns = [
+        /(?:CEO|Chief Executive Officer|President)[\s:]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+        /\*\*(?:CEO|President)\*\*[\s:]+([A-Z][a-z\s]+)/i,
+      ];
+      
+      for (const pattern of ceoPatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.ceo = match[1].trim();
+          console.log(`Found CEO: ${investment.ceo}`);
+          break;
+        }
+      }
+      
+      // Extract Investment Role
+      const rolePatterns = [
+        /(?:Ironbridge\s+Investment\s+Role|Investment\s+Role)[\s:]+([A-Za-z\s]+(?:Investor|Partner|Lead))/i,
+        /\*\*(?:Investment\s+Role)\*\*[\s:]+([A-Za-z\s]+)/i,
+      ];
+      
+      for (const pattern of rolePatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.investmentRole = match[1].trim();
+          console.log(`Found investment role: ${investment.investmentRole}`);
+          break;
+        }
+      }
+      
+      // Extract Ownership
+      const ownershipPatterns = [
+        /(?:Ironbridge\s+Ownership|Ownership)[\s:]+([A-Za-z\s]+(?:Control|Minority|Majority))/i,
+        /\*\*(?:Ownership)\*\*[\s:]+([A-Za-z\s]+)/i,
+      ];
+      
+      for (const pattern of ownershipPatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.ownership = match[1].trim();
+          console.log(`Found ownership: ${investment.ownership}`);
+          break;
+        }
+      }
+      
       // Extract date/year
       const datePatterns = [
         /(?:Investment Date|Date|Year|Acquired|Founded)[\s:]+([A-Za-z]+\s+\d{4}|\d{1,2}[\/\-]\d{4}|\d{4})/i,
@@ -356,6 +474,66 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
         if (match && match[1]) {
           investment.date = match[1].trim();
           console.log(`Found date: ${investment.date}`);
+          break;
+        }
+      }
+      
+      // Extract Year of Initial Investment
+      const yearPatterns = [
+        /(?:Year\s+of\s+Initial\s+Investment|Investment\s+Year)[\s:]+(\d{4})/i,
+        /\*\*(?:Year\s+of\s+Initial\s+Investment)\*\*[\s:]+(\d{4})/i,
+      ];
+      
+      for (const pattern of yearPatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.year = match[1].trim();
+          console.log(`Found year: ${investment.year}`);
+          break;
+        }
+      }
+      
+      // Extract Location
+      const locationPatterns = [
+        /(?:Location|Headquarters|Address)[\s:]+([A-Za-z\s,]+(?:ON|QC|BC|AB|MB|SK|NS|NB|PE|NL|YT|NT|NU|Canada|USA|United States))/i,
+        /\*\*(?:Location)\*\*[\s:]+([A-Za-z\s,]+)/i,
+      ];
+      
+      for (const pattern of locationPatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.location = match[1].trim();
+          console.log(`Found location: ${investment.location}`);
+          break;
+        }
+      }
+      
+      // Extract Website
+      const websitePatterns = [
+        /(?:Website|URL)[\s:]+([a-z]+:\/\/[^\s<\n]+)/i,
+        /\*\*(?:Website)\*\*[\s:]+([a-z]+:\/\/[^\s<\n]+)/i,
+      ];
+      
+      for (const pattern of websitePatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.website = match[1].trim();
+          console.log(`Found website: ${investment.website}`);
+          break;
+        }
+      }
+      
+      // Extract Status
+      const statusPatterns = [
+        /(?:Status|Investment\s+Status)[\s:]+([A-Za-z\s]+(?:Current|Exited|Active|Past))/i,
+        /\*\*(?:Status)\*\*[\s:]+([A-Za-z]+)/i,
+      ];
+      
+      for (const pattern of statusPatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+          investment.status = match[1].trim();
+          console.log(`Found status: ${investment.status}`);
           break;
         }
       }
