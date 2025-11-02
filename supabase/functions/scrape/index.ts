@@ -985,43 +985,43 @@ Deno.serve(async (req) => {
             },
             body: JSON.stringify({
               url: pageUrl,
-              mode: "structured",
-              schema: extractionSchema,
+              formats: ["extract"],
+              extract: {
+                schema: extractionSchema,
+              },
             }),
           }
         );
 
         if (!scrapeResponse.ok) {
           const errorText = await scrapeResponse.text();
-          console.error(`Failed to extract from ${pageUrl}:`, errorText);
+          console.error(`HTTP ${scrapeResponse.status} failed to extract from ${pageUrl}:`, errorText);
           failedPages++;
           continue;
         }
 
         const scrapeData = await scrapeResponse.json();
-        console.log(`Firecrawl response for ${pageUrl}:`, JSON.stringify(scrapeData).substring(0, 500));
         
-        const extracted =
-          (scrapeData && (scrapeData as any).extract) ||
-          (scrapeData && (scrapeData as any).data && (scrapeData as any).data.extract) ||
-          (Array.isArray((scrapeData as any)?.data) ? (scrapeData as any).data[0]?.extract : undefined) ||
-          (Array.isArray(scrapeData) ? (scrapeData as any)[0]?.extract : undefined);
+        // Log full response for debugging
+        console.log(`Full Firecrawl response for ${pageUrl}:`, JSON.stringify(scrapeData));
+        
+        // Extract data from the correct Firecrawl v1 response structure
+        const extracted = scrapeData?.data?.extract || scrapeData?.extract;
 
-        if ((scrapeData as any)?.success !== false && extracted) {
-          const e = extracted as any;
-          console.log(`Extracted data:`, JSON.stringify(e));
+        if (scrapeData?.success && extracted) {
+          console.log(`Extracted data:`, JSON.stringify(extracted));
           
           // Map the structured data to our Investment type
           const investment: Investment = {
-            name: cleanInvestmentName(e.company_name || ""),
-            industry: e.industry,
-            ceo: e.ceo,
-            investmentRole: e.investment_role,
-            ownership: e.ownership,
-            year: e.year_of_initial_investment,
-            location: e.location,
-            website: e.website,
-            status: e.status,
+            name: cleanInvestmentName(extracted.company_name || ""),
+            industry: extracted.industry,
+            ceo: extracted.ceo,
+            investmentRole: extracted.investment_role,
+            ownership: extracted.ownership,
+            year: extracted.year_of_initial_investment,
+            location: extracted.location,
+            website: extracted.website,
+            status: extracted.status,
             sourceUrl: pageUrl,
             portfolioUrl: pageUrl,
           };
@@ -1032,10 +1032,14 @@ Deno.serve(async (req) => {
             console.log(`Successfully extracted: ${investment.name}`);
           } else {
             console.warn(`Extraction returned empty name for ${pageUrl}`);
+            console.warn(`Full extraction data:`, JSON.stringify(extracted));
             failedPages++;
           }
         } else {
-          console.warn(`No structured data extracted from ${pageUrl}. Keys: ${Object.keys(scrapeData || {}).join(', ')}`);
+          console.warn(`No structured data extracted from ${pageUrl}`);
+          console.warn(`Response success: ${scrapeData?.success}, has extract: ${!!extracted}`);
+          console.warn(`Available keys: ${Object.keys(scrapeData || {}).join(', ')}`);
+          console.warn(`Full response:`, JSON.stringify(scrapeData));
           failedPages++;
         }
       } catch (error) {
