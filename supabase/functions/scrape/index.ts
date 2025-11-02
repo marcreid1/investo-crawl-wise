@@ -34,10 +34,24 @@ function cleanInvestmentName(name: string): string {
     .trim();
 }
 
+function normalizeIndustry(industry: string | undefined): string | undefined {
+  if (!industry) return undefined;
+  
+  // If industry is too long or has too many commas, it's likely concatenated
+  const commaCount = (industry.match(/,/g) || []).length;
+  if (industry.length > 120 || commaCount > 4) {
+    // Take only the first segment
+    const firstSegment = industry.split(',')[0].trim();
+    return firstSegment.length > 3 ? firstSegment : undefined;
+  }
+  
+  return industry;
+}
+
 function cleanInvestment(investment: Investment): Investment {
   return {
     name: cleanInvestmentName(investment.name),
-    industry: investment.industry ? cleanText(investment.industry) : undefined,
+    industry: normalizeIndustry(investment.industry ? cleanText(investment.industry) : undefined),
     date: investment.date ? cleanText(investment.date) : undefined,
     year: investment.year ? cleanText(investment.year) : undefined,
     description: investment.description ? cleanText(investment.description) : undefined,
@@ -91,6 +105,56 @@ interface Investment {
   sourceUrl: string;
 }
 
+// Helper to harvest detail page links from listing page HTML
+function harvestDetailLinksFromHTML(html: string, baseUrl: string, maxPages: number = 50): string[] {
+  if (!html) return [];
+  
+  const links = new Set<string>();
+  const hrefRegex = /href="([^"]+)"/gi;
+  let match;
+  
+  while ((match = hrefRegex.exec(html)) !== null) {
+    const href = match[1];
+    
+    // Look for URLs that match detail page patterns
+    if (/\/(portfolio|investments|companies?)\/[^\/\s#?]+\/?$/i.test(href)) {
+      try {
+        // Convert to absolute URL
+        const absoluteUrl = new URL(href, baseUrl).toString();
+        
+        // Don't include the base listing page itself
+        if (!absoluteUrl.endsWith('/portfolio') && 
+            !absoluteUrl.endsWith('/portfolio/') &&
+            !absoluteUrl.endsWith('/investments') &&
+            !absoluteUrl.endsWith('/investments/') &&
+            !absoluteUrl.endsWith('/companies') &&
+            !absoluteUrl.endsWith('/companies/')) {
+          links.add(absoluteUrl);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+    
+    if (links.size >= maxPages) break;
+  }
+  
+  const result = Array.from(links).slice(0, maxPages);
+  console.log(`Harvested ${result.length} potential detail page links from ${baseUrl}`);
+  return result;
+}
+
+// Helper to detect if URL is a detail page (not a listing)
+function isDetailPage(url: string): boolean {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+    // Only URLs ending with /portfolio/<slug> or /investments/<slug> are detail pages
+    return /\/(portfolio|investments|companies?)\/[^\/\s#?]+\/?$/i.test(path);
+  } catch {
+    return false;
+  }
+}
+
 // Helper function to extract investment data from HTML using CSS selectors
 function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
   const investments: Investment[] = [];
@@ -109,7 +173,7 @@ function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
     console.log(`Page title: ${pageTitle}`);
     
     // If this is a single investment detail page, extract from the whole page
-    const isSingleInvestmentPage = pageUrl.includes('/investment') || pageUrl.includes('/portfolio') || pageUrl.includes('/company');
+    const isSingleInvestmentPage = isDetailPage(pageUrl);
     
     if (isSingleInvestmentPage && pageTitle) {
       console.log(`Detected single investment page, extracting from full content`);
@@ -388,7 +452,7 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
     console.log(`Text length: ${text.length} characters`);
     
     // For single investment pages, extract from full content
-    const isSingleInvestmentPage = pageUrl.includes('/investment') || pageUrl.includes('/portfolio') || pageUrl.includes('/company');
+    const isSingleInvestmentPage = isDetailPage(pageUrl);
     
     if (isSingleInvestmentPage && pageTitle) {
       console.log(`Single investment page detected, extracting full details`);
@@ -1290,17 +1354,37 @@ Deno.serve(async (req) => {
           }
         );
 
-        // Handle timeout with fallback to markdown extraction
-        if (!scrapeResponse.ok) {
-          const errorText = await scrapeResponse.text();
-          console.error(`HTTP ${scrapeResponse.status} failed to extract from ${pageUrl}:`, errorText);
+        const scrapeData = !scrapeResponse.ok ? null : await scrapeResponse.json();
+        
+        // Extract data from the correct Firecrawl v1 response structure
+        const extracted = scrapeData?.data?.extract || scrapeData?.extract;
+        const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
+        const html = scrapeData?.data?.html || scrapeData?.html;
+        
+        // Determine if we need fallback extraction
+        const needsFallback = !scrapeResponse.ok || 
+                              !scrapeData?.success || 
+                              scrapeData?.code === 'SCRAPE_TIMEOUT' ||
+                              !extracted;
+        
+        if (needsFallback) {
+          if (!scrapeResponse.ok) {
+            const errorText = await scrapeResponse.text();
+            console.error(`HTTP ${scrapeResponse.status} failed to extract from ${pageUrl}:`, errorText);
+          } else if (!scrapeData?.success) {
+            console.error(`scrapeData.success=false for ${pageUrl}, code=${scrapeData?.code}`);
+          } else if (!extracted) {
+            console.warn(`No extracted data present for ${pageUrl}`);
+          }
           
-          // If timeout (408), try fallback markdown extraction
-          if (scrapeResponse.status === 408) {
-            console.log(`AI extraction timed out for ${pageUrl}, falling back to markdown extraction`);
-            
+          console.log(`Using markdown/HTML fallback extraction for ${pageUrl}`);
+          
+          let fallbackMarkdown = markdown;
+          let fallbackHtml = html;
+          
+          // If we don't have markdown/html yet, fetch it
+          if (!fallbackMarkdown && !fallbackHtml) {
             try {
-              // Fetch page with just markdown
               const markdownResponse = await fetch(
                 "https://api.firecrawl.dev/v1/scrape",
                 {
@@ -1318,65 +1402,120 @@ Deno.serve(async (req) => {
               
               if (markdownResponse.ok) {
                 const markdownData = await markdownResponse.json();
-                const markdown = markdownData?.data?.markdown || markdownData?.markdown;
-                const html = markdownData?.data?.html || markdownData?.html;
-                
-                if (markdown || html) {
-                  console.log(`Successfully fetched markdown/HTML for fallback extraction (${markdown?.length || 0} chars)`);
-                  
-                  // Use existing extraction functions as fallback
-                  const pageData = {
-                    markdown: markdown || "",
-                    html: html || "",
-                    metadata: { sourceURL: pageUrl }
-                  };
-                  
-                  const fallbackInvestments = extractInvestmentData(pageData);
-                  console.log(`Markdown fallback extracted ${fallbackInvestments.length} investments from ${pageUrl}`);
-                  
-                  for (const investment of fallbackInvestments) {
-                    investment.sourceUrl = pageUrl;
-                    investment.portfolioUrl = pageUrl;
-                    
-                    const validation = validateInvestment(investment);
-                    console.log(`  - ${investment.name}: ${validation.confidence}% confidence (fallback-markdown)`);
-                    
-                    validationResults.push({
-                      name: investment.name,
-                      confidence: validation.confidence,
-                      missing: validation.missing,
-                      method: 'fallback-markdown'
-                    });
-                    
-                    if (investment.name) {
-                      allInvestments.push(investment);
-                    }
-                  }
-                  
-                  if (fallbackInvestments.length > 0) {
-                    successfulPages++;
-                  } else {
-                    failedPages++;
-                  }
-                  continue;
-                }
+                fallbackMarkdown = markdownData?.data?.markdown || markdownData?.markdown;
+                fallbackHtml = markdownData?.data?.html || markdownData?.html;
               }
-            } catch (fallbackError) {
-              console.error(`Fallback extraction also failed for ${pageUrl}:`, fallbackError);
+            } catch (fetchError) {
+              console.error(`Failed to fetch markdown/HTML for ${pageUrl}:`, fetchError);
             }
           }
           
-          failedPages++;
-          continue;
+          if (fallbackMarkdown || fallbackHtml) {
+            console.log(`Successfully retrieved markdown/HTML for fallback (${fallbackMarkdown?.length || 0} chars markdown, ${fallbackHtml?.length || 0} chars HTML)`);
+            
+            const pageData = {
+              markdown: fallbackMarkdown || "",
+              html: fallbackHtml || "",
+              metadata: { sourceURL: pageUrl, url: pageUrl }
+            };
+            
+            let fallbackInvestments = extractInvestmentData(pageData);
+            
+            // If this is a listing page and we got few results, try harvesting detail links
+            if (!isDetailPage(pageUrl) && fallbackInvestments.length < 3 && fallbackHtml) {
+              console.log(`Listing page returned only ${fallbackInvestments.length} investments, attempting to harvest detail links...`);
+              const harvestedLinks = harvestDetailLinksFromHTML(fallbackHtml, pageUrl, maxPages);
+              
+              if (harvestedLinks.length > 0) {
+                console.log(`Harvested ${harvestedLinks.length} detail page links, extracting from each...`);
+                
+                // Extract from each harvested detail page
+                for (const detailUrl of harvestedLinks) {
+                  try {
+                    const detailResponse = await fetch(
+                      "https://api.firecrawl.dev/v1/scrape",
+                      {
+                        method: "POST",
+                        headers: {
+                          Authorization: `Bearer ${apiKey}`,
+                          "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                          url: detailUrl,
+                          formats: ["extract"],
+                          extract: {
+                            schema: singleExtractionSchema,
+                          },
+                        }),
+                      }
+                    );
+                    
+                    if (detailResponse.ok) {
+                      const detailData = await detailResponse.json();
+                      const detailExtracted = detailData?.data?.extract || detailData?.extract;
+                      
+                      if (detailExtracted?.company_name) {
+                        const investment: Investment = {
+                          name: cleanInvestmentName(detailExtracted.company_name),
+                          industry: detailExtracted.industry,
+                          ceo: detailExtracted.ceo,
+                          investmentRole: detailExtracted.investment_role,
+                          ownership: detailExtracted.ownership,
+                          year: detailExtracted.year_of_initial_investment,
+                          location: detailExtracted.location,
+                          website: detailExtracted.website,
+                          status: detailExtracted.status,
+                          sourceUrl: detailUrl,
+                          portfolioUrl: detailUrl,
+                        };
+                        
+                        fallbackInvestments.push(investment);
+                        console.log(`  Harvested: ${investment.name} from ${detailUrl}`);
+                      }
+                    }
+                  } catch (detailError) {
+                    console.error(`Failed to extract from harvested detail page ${detailUrl}:`, detailError);
+                  }
+                }
+              }
+            }
+            
+            console.log(`Fallback extraction returned ${fallbackInvestments.length} investments from ${pageUrl}`);
+            
+            for (const investment of fallbackInvestments) {
+              investment.sourceUrl = pageUrl;
+              investment.portfolioUrl = pageUrl;
+              
+              const validation = validateInvestment(investment);
+              console.log(`  - ${investment.name}: ${validation.confidence}% confidence (fallback-markdown)`);
+              
+              validationResults.push({
+                name: investment.name,
+                confidence: validation.confidence,
+                missing: validation.missing,
+                method: 'fallback-markdown'
+              });
+              
+              if (investment.name) {
+                allInvestments.push(investment);
+              }
+            }
+            
+            if (fallbackInvestments.length > 0) {
+              successfulPages++;
+            } else {
+              failedPages++;
+            }
+            continue;
+          } else {
+            console.error(`No markdown or HTML available for fallback extraction from ${pageUrl}`);
+            failedPages++;
+            continue;
+          }
         }
 
-        const scrapeData = await scrapeResponse.json();
-        
-        // Extract data from the correct Firecrawl v1 response structure
-        const extracted = scrapeData?.data?.extract || scrapeData?.extract;
-        const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
-
-        if (scrapeData?.success && extracted) {
+        // AI extraction succeeded
+        if (extracted) {
           console.log(`Extracted data:`, JSON.stringify(extracted));
           console.log(`Markdown length: ${markdown?.length || 0} chars`);
           
