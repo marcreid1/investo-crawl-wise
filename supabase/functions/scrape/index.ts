@@ -787,21 +787,62 @@ Deno.serve(async (req) => {
     console.log(`Maximum pages: ${maxPagesValue}`);
     console.log(`JavaScript rendering: ${renderJs ? 'enabled' : 'disabled'}`);
 
-    // Use Firecrawl v1 API format with pagination support
+    // Use structured extraction mode
+    console.log("Using Firecrawl structured extraction mode");
+    
+    const extractionSchema = {
+      type: "object",
+      properties: {
+        company_name: { 
+          type: "string", 
+          description: "The name of the portfolio company." 
+        },
+        industry: { 
+          type: "string", 
+          description: "The primary industry or sector of the company." 
+        },
+        ceo: { 
+          type: "string", 
+          description: "The name of the Chief Executive Officer or equivalent company leader." 
+        },
+        investment_role: { 
+          type: "string", 
+          description: "The firm's role in the investment (e.g., lead investor, minority partner, strategic investor)." 
+        },
+        ownership: { 
+          type: "string", 
+          description: "The ownership stake or percentage held in the company." 
+        },
+        year_of_initial_investment: { 
+          type: "string", 
+          description: "The year the firm first invested in the company." 
+        },
+        location: { 
+          type: "string", 
+          description: "The headquarters city and province/state of the company." 
+        },
+        website: { 
+          type: "string", 
+          description: "The company's official website URL." 
+        },
+        status: { 
+          type: "string", 
+          description: "The investment status (e.g., Current, Realized, Exited)." 
+        }
+      },
+      required: ["company_name", "industry", "website"]
+    };
+
+    // First, crawl to discover all investment pages
+    console.log("Step 1: Discovering investment pages...");
     const crawlRequestBody: any = {
       url: url,
       limit: maxPagesValue,
-      scrapeOptions: {
-        formats: ["markdown", "html"],
-      },
       maxDepth: crawlDepthValue,
+      scrapeOptions: {
+        formats: ["markdown"],
+      },
     };
-
-    // Enable JavaScript rendering if requested
-    if (renderJs) {
-      crawlRequestBody.scrapeOptions.waitFor = 2000; // Wait for dynamic content
-      crawlRequestBody.scrapeOptions.mobile = false;
-    }
 
     console.log("Sending crawl request to Firecrawl API");
     const crawlInitResponse = await fetch(
@@ -818,11 +859,11 @@ Deno.serve(async (req) => {
 
     if (!crawlInitResponse.ok) {
       const errorText = await crawlInitResponse.text();
-      console.error("Firecrawl API error:", crawlInitResponse.status, errorText);
+      console.error("Firecrawl crawl API error:", crawlInitResponse.status, errorText);
       return new Response(
         JSON.stringify({
           success: false,
-          error: `Firecrawl API error: ${errorText}`,
+          error: `Firecrawl crawl API error: ${errorText}`,
         }),
         {
           status: 500,
@@ -852,7 +893,7 @@ Deno.serve(async (req) => {
 
     // Poll for crawl completion
     let crawlComplete = false;
-    let crawlData: CrawlStatusResponse | null = null;
+    let discoveredUrls: string[] = [];
     const maxAttempts = 60; // Poll for up to 2 minutes
     let attempts = 0;
 
@@ -878,33 +919,38 @@ Deno.serve(async (req) => {
       }
 
       try {
-        crawlData = await statusResponse.json();
+        const crawlData = await statusResponse.json();
         console.log(`Crawl status (attempt ${attempts}/${maxAttempts}):`, crawlData?.status, `- Completed: ${crawlData?.completed || 0}/${crawlData?.total || 0}`);
+        
+        if (crawlData?.status === "completed") {
+          crawlComplete = true;
+          // Extract URLs from crawled pages
+          if (crawlData.data && crawlData.data.length > 0) {
+            discoveredUrls = crawlData.data
+              .map((page: any) => page.metadata?.url)
+              .filter((url: string) => url && (url.includes('/investment') || url.includes('/portfolio') || url.includes('/company')));
+          }
+          console.log(`Discovered ${discoveredUrls.length} investment pages`);
+        } else if (crawlData?.status === "failed") {
+          console.error("Crawl job failed");
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "Crawl job failed",
+            }),
+            {
+              status: 500,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
       } catch (jsonError) {
         console.error(`Failed to parse status response JSON (attempt ${attempts}):`, jsonError);
         continue;
       }
-
-      if (crawlData?.status === "completed") {
-        crawlComplete = true;
-        console.log("Crawl completed successfully");
-      } else if (crawlData?.status === "failed") {
-        console.error("Crawl job failed with status:", crawlData);
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "Crawl job failed - check Firecrawl API status",
-            details: crawlData,
-          }),
-          {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
     }
 
-    if (!crawlComplete || !crawlData) {
+    if (!crawlComplete) {
       console.error(`Crawl timeout after ${attempts} attempts (${attempts * 2} seconds)`);
       return new Response(
         JSON.stringify({
@@ -919,40 +965,77 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log("Crawl completed successfully. Pages crawled:", crawlData.completed, "Total:", crawlData.total, "Credits used:", crawlData.creditsUsed);
-
-    // Parse investment data from each page with error resilience
-    console.log("Parsing investment data from crawled pages...");
+    // Step 2: Use structured extraction on each discovered page
+    console.log("Step 2: Extracting structured data from discovered pages...");
     const allInvestments: Investment[] = [];
     let successfulPages = 0;
     let failedPages = 0;
-    
-    if (crawlData.data && crawlData.data.length > 0) {
-      console.log(`Processing ${crawlData.data.length} crawled pages`);
-      
-      crawlData.data.forEach((page, index) => {
-        try {
-          console.log(`Processing page ${index + 1}/${crawlData.data?.length || 0}: ${page.metadata?.url || 'unknown'}`);
-          const investments = extractInvestmentData(page);
-          
-          if (investments.length > 0) {
-            allInvestments.push(...investments);
-            successfulPages++;
-            console.log(`Successfully extracted ${investments.length} investments from page ${index + 1}`);
-          } else {
-            console.log(`No investments found on page ${index + 1}: ${page.metadata?.url || 'unknown'}`);
+
+    for (const pageUrl of discoveredUrls) {
+      try {
+        console.log(`Extracting structured data from: ${pageUrl}`);
+        
+        const scrapeResponse = await fetch(
+          "https://api.firecrawl.dev/v1/scrape",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              url: pageUrl,
+              formats: ["extract"],
+              extract: {
+                schema: extractionSchema,
+              },
+            }),
           }
-        } catch (pageError) {
+        );
+
+        if (!scrapeResponse.ok) {
+          const errorText = await scrapeResponse.text();
+          console.error(`Failed to extract from ${pageUrl}:`, errorText);
           failedPages++;
-          console.error(`Failed to process page ${index + 1} (${page.metadata?.url || 'unknown'}):`, pageError);
-          // Continue processing other pages
+          continue;
         }
-      });
-      
-      console.log(`Page processing summary: ${successfulPages} successful, ${failedPages} failed`);
-    } else {
-      console.warn('No crawl data available to process');
+
+        const scrapeData = await scrapeResponse.json();
+        
+        if (scrapeData.success && scrapeData.extract) {
+          const extracted = scrapeData.extract;
+          
+          // Map the structured data to our Investment type
+          const investment: Investment = {
+            name: cleanInvestmentName(extracted.company_name || ""),
+            industry: extracted.industry,
+            ceo: extracted.ceo,
+            investmentRole: extracted.investment_role,
+            ownership: extracted.ownership,
+            year: extracted.year_of_initial_investment,
+            location: extracted.location,
+            website: extracted.website,
+            status: extracted.status,
+            sourceUrl: pageUrl,
+            portfolioUrl: pageUrl,
+          };
+
+          if (investment.name) {
+            allInvestments.push(investment);
+            successfulPages++;
+            console.log(`Successfully extracted: ${investment.name}`);
+          }
+        } else {
+          console.warn(`No structured data extracted from ${pageUrl}`);
+          failedPages++;
+        }
+      } catch (error) {
+        console.error(`Error extracting from ${pageUrl}:`, error);
+        failedPages++;
+      }
     }
+
+    console.log(`Extraction summary: ${successfulPages} successful, ${failedPages} failed`);
 
     // Deduplicate investments
     console.log(`Deduplicating ${allInvestments.length} total investments...`);
@@ -968,9 +1051,9 @@ Deno.serve(async (req) => {
     const responseData = {
       success: true,
       crawlStats: {
-        completed: crawlData.completed || 0,
-        total: crawlData.total || 0,
-        creditsUsed: crawlData.creditsUsed || 0,
+        completed: discoveredUrls.length || 0,
+        total: discoveredUrls.length || 0,
+        creditsUsed: discoveredUrls.length || 0,
         successfulPages: successfulPages || 0,
         failedPages: failedPages || 0,
       },
@@ -980,6 +1063,7 @@ Deno.serve(async (req) => {
         crawlDepth: crawlDepthValue,
         maxPages: maxPagesValue,
         renderJs: renderJs || false,
+        extractionMode: "structured",
         timestamp: new Date().toISOString(),
       },
     };
@@ -1004,8 +1088,8 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           url: url,
           investment_count: cleanedInvestments.length,
-          pages_crawled: crawlData.completed,
-          credits_used: crawlData.creditsUsed,
+          pages_crawled: discoveredUrls.length,
+          credits_used: discoveredUrls.length,
           investments_data: cleanedInvestments,
         }),
       })
