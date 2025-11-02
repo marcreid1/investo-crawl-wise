@@ -13,7 +13,7 @@ const SETTINGS_KEY = "investment_scraper_settings";
 
 const DEFAULT_SETTINGS: ScraperSettings = {
   outputFormat: "excel",
-  crawlDepth: 2,
+  crawlDepth: 5,
   enableCompanyTags: false,
   renderJs: false,
   maxPages: 50,

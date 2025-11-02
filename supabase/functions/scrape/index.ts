@@ -1290,9 +1290,82 @@ Deno.serve(async (req) => {
           }
         );
 
+        // Handle timeout with fallback to markdown extraction
         if (!scrapeResponse.ok) {
           const errorText = await scrapeResponse.text();
           console.error(`HTTP ${scrapeResponse.status} failed to extract from ${pageUrl}:`, errorText);
+          
+          // If timeout (408), try fallback markdown extraction
+          if (scrapeResponse.status === 408) {
+            console.log(`AI extraction timed out for ${pageUrl}, falling back to markdown extraction`);
+            
+            try {
+              // Fetch page with just markdown
+              const markdownResponse = await fetch(
+                "https://api.firecrawl.dev/v1/scrape",
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    url: pageUrl,
+                    formats: ["markdown", "html"],
+                  }),
+                }
+              );
+              
+              if (markdownResponse.ok) {
+                const markdownData = await markdownResponse.json();
+                const markdown = markdownData?.data?.markdown || markdownData?.markdown;
+                const html = markdownData?.data?.html || markdownData?.html;
+                
+                if (markdown || html) {
+                  console.log(`Successfully fetched markdown/HTML for fallback extraction (${markdown?.length || 0} chars)`);
+                  
+                  // Use existing extraction functions as fallback
+                  const pageData = {
+                    markdown: markdown || "",
+                    html: html || "",
+                    metadata: { sourceURL: pageUrl }
+                  };
+                  
+                  const fallbackInvestments = extractInvestmentData(pageData);
+                  console.log(`Markdown fallback extracted ${fallbackInvestments.length} investments from ${pageUrl}`);
+                  
+                  for (const investment of fallbackInvestments) {
+                    investment.sourceUrl = pageUrl;
+                    investment.portfolioUrl = pageUrl;
+                    
+                    const validation = validateInvestment(investment);
+                    console.log(`  - ${investment.name}: ${validation.confidence}% confidence (fallback-markdown)`);
+                    
+                    validationResults.push({
+                      name: investment.name,
+                      confidence: validation.confidence,
+                      missing: validation.missing,
+                      method: 'fallback-markdown'
+                    });
+                    
+                    if (investment.name) {
+                      allInvestments.push(investment);
+                    }
+                  }
+                  
+                  if (fallbackInvestments.length > 0) {
+                    successfulPages++;
+                  } else {
+                    failedPages++;
+                  }
+                  continue;
+                }
+              }
+            } catch (fallbackError) {
+              console.error(`Fallback extraction also failed for ${pageUrl}:`, fallbackError);
+            }
+          }
+          
           failedPages++;
           continue;
         }
@@ -1337,6 +1410,7 @@ Deno.serve(async (req) => {
                 name: investment.name,
                 confidence: validation.confidence,
                 missing: validation.missing,
+                method: 'ai-listing'
               });
 
               if (investment.name) {
@@ -1374,6 +1448,7 @@ Deno.serve(async (req) => {
               name: investment.name,
               confidence: validation.confidence,
               missing: validation.missing,
+              method: 'ai-detail'
             });
 
             if (investment.name) {
@@ -1400,11 +1475,29 @@ Deno.serve(async (req) => {
 
     console.log(`Extraction summary: ${successfulPages} successful, ${failedPages} failed`);
     
+    // Calculate extraction method statistics
+    const aiExtractions = validationResults.filter(v => v.method?.startsWith('ai-'));
+    const fallbackExtractions = validationResults.filter(v => v.method === 'fallback-markdown');
+    const avgAiConfidence = aiExtractions.length > 0
+      ? Math.round(aiExtractions.reduce((sum, v) => sum + v.confidence, 0) / aiExtractions.length)
+      : 0;
+    const avgFallbackConfidence = fallbackExtractions.length > 0
+      ? Math.round(fallbackExtractions.reduce((sum, v) => sum + v.confidence, 0) / fallbackExtractions.length)
+      : 0;
+    
     // Calculate average confidence
     const avgConfidence = validationResults.length > 0
       ? Math.round(validationResults.reduce((sum, v) => sum + v.confidence, 0) / validationResults.length)
       : 0;
-    console.log(`Average extraction confidence: ${avgConfidence}%`);
+    
+    if (aiExtractions.length > 0 && fallbackExtractions.length > 0) {
+      console.log(`Extraction methods: ${aiExtractions.length} AI (avg ${avgAiConfidence}%), ${fallbackExtractions.length} markdown fallback (avg ${avgFallbackConfidence}%)`);
+    } else if (aiExtractions.length > 0) {
+      console.log(`Extraction methods: ${aiExtractions.length} AI (avg ${avgAiConfidence}%)`);
+    } else if (fallbackExtractions.length > 0) {
+      console.log(`Extraction methods: ${fallbackExtractions.length} markdown fallback (avg ${avgFallbackConfidence}%)`);
+    }
+    console.log(`Overall average extraction confidence: ${avgConfidence}%`);
     
     const incompleteInvestments = validationResults.filter(v => v.confidence < 70).length;
     if (incompleteInvestments > 0) {
@@ -1438,7 +1531,12 @@ Deno.serve(async (req) => {
         successfulExtractions: successfulPages,
         averageConfidence: avgConfidence,
         incompleteInvestments: incompleteInvestments,
-        extractionMethod: 'ai+fallback'
+        extractionMethods: {
+          ai: aiExtractions.length,
+          fallbackMarkdown: fallbackExtractions.length,
+          aiAvgConfidence: avgAiConfidence,
+          fallbackAvgConfidence: avgFallbackConfidence
+        }
       },
       metadata: {
         url: url,
