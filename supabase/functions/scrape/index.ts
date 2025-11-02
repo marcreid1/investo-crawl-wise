@@ -955,16 +955,17 @@ Deno.serve(async (req) => {
     // Use structured extraction mode
     console.log("Using Firecrawl structured extraction mode");
     
-    const extractionSchema = {
+    // Schema for SINGLE investment detail pages
+    const singleExtractionSchema = {
       type: "object",
       properties: {
         company_name: { 
           type: "string", 
-          description: "The portfolio company name. Look for the page title, main heading, or text near 'Company:', 'Portfolio Company:', or 'Investment:'. Remove any suffixes like '– [Firm Name]'." 
+          description: "The portfolio company name for THIS SPECIFIC PAGE ONLY. Look for the page title, main heading, or text near 'Company:', 'Portfolio Company:', or 'Investment:'. Remove any suffixes like '– [Firm Name]'." 
         },
         industry: { 
           type: "string", 
-          description: "Industry, sector, or vertical. Look for labels like 'Industry:', 'Sector:', 'Category:', 'Vertical:', 'Business:', or 'Market:'. Common values include Manufacturing, Healthcare, Technology, Financial Services, Energy Services, Distribution, etc." 
+          description: "Industry for THIS SPECIFIC COMPANY ONLY. Look for labels like 'Industry:', 'Sector:', 'Category:', 'Vertical:', 'Business:', or 'Market:'. Return a single industry value, NOT a comma-separated list of multiple industries from different companies." 
         },
         ceo: { 
           type: "string", 
@@ -996,6 +997,60 @@ Deno.serve(async (req) => {
         }
       },
       required: ["company_name"]
+    };
+
+    // Schema for LISTING pages (multiple investments on one page)
+    const listingExtractionSchema = {
+      type: "object",
+      properties: {
+        investments: {
+          type: "array",
+          description: "Array of ALL portfolio companies visible on this page. Each company should be a separate item in the array with its own distinct fields.",
+          items: {
+            type: "object",
+            properties: {
+              company_name: {
+                type: "string",
+                description: "Portfolio company name for THIS SPECIFIC COMPANY ONLY."
+              },
+              industry: {
+                type: "string", 
+                description: "Industry for THIS SPECIFIC COMPANY ONLY. Do NOT concatenate industries from multiple companies. Return a single industry value per company."
+              },
+              ceo: {
+                type: "string",
+                description: "CEO or leader for THIS SPECIFIC COMPANY ONLY."
+              },
+              investment_role: {
+                type: "string",
+                description: "Investment role for THIS SPECIFIC COMPANY. Values: 'Lead Investor', 'Co-Investor', 'Minority Partner', etc."
+              },
+              ownership: {
+                type: "string",
+                description: "Ownership for THIS SPECIFIC COMPANY. Values: 'Control', 'Majority', 'Minority', etc."
+              },
+              year_of_initial_investment: {
+                type: "string",
+                description: "Year of investment for THIS SPECIFIC COMPANY. Just the 4-digit year."
+              },
+              location: {
+                type: "string",
+                description: "Headquarters location for THIS SPECIFIC COMPANY."
+              },
+              website: {
+                type: "string",
+                description: "Website URL for THIS SPECIFIC COMPANY."
+              },
+              status: {
+                type: "string",
+                description: "Status for THIS SPECIFIC COMPANY. Values: 'Active', 'Exited', etc."
+              }
+            },
+            required: ["company_name"]
+          }
+        }
+      },
+      required: ["investments"]
     };
 
     // First, crawl to discover all investment pages
@@ -1072,6 +1127,8 @@ Deno.serve(async (req) => {
     // Poll for crawl completion with reduced timeout budget
     let crawlComplete = false;
     let discoveredUrls: string[] = [];
+    let listingPages: string[] = [];
+    let detailPages: string[] = [];
     const maxAttempts = 30; // Poll for up to 60 seconds (30 * 2s)
     let attempts = 0;
 
@@ -1111,6 +1168,34 @@ Deno.serve(async (req) => {
           if (uniqueUrls.length > discoveredUrls.length) {
             console.log(`[${rid}] Incrementally discovered ${uniqueUrls.length - discoveredUrls.length} new URLs`);
             discoveredUrls = uniqueUrls;
+            
+            // Categorize URLs into listing pages vs detail pages
+            listingPages = [];
+            detailPages = [];
+            
+            discoveredUrls.forEach(pageUrl => {
+              const urlPath = new URL(pageUrl).pathname.toLowerCase();
+              
+              // Listing page indicators: ends with /portfolio, /portfolio/, /investments, or matches base URL
+              const isListingPage = 
+                pageUrl === url || // Exact match to crawl URL
+                urlPath.endsWith('/portfolio') ||
+                urlPath.endsWith('/portfolio/') ||
+                urlPath.endsWith('/investments') ||
+                urlPath.endsWith('/investments/') ||
+                urlPath === '/portfolio' ||
+                urlPath === '/portfolio/' ||
+                urlPath === '/investments' ||
+                urlPath === '/investments/';
+              
+              if (isListingPage) {
+                listingPages.push(pageUrl);
+              } else {
+                detailPages.push(pageUrl);
+              }
+            });
+            
+            console.log(`[${rid}] Categorized URLs: ${listingPages.length} listing pages, ${detailPages.length} detail pages`);
           }
         }
         
@@ -1169,9 +1254,23 @@ Deno.serve(async (req) => {
     let successfulPages = 0;
     let failedPages = 0;
 
-    for (const pageUrl of discoveredUrls) {
+    // Determine extraction strategy
+    const shouldUseListingSchema = listingPages.length > 0 && detailPages.length === 0;
+    if (shouldUseListingSchema) {
+      console.log(`[${rid}] No detail pages found, will extract from ${listingPages.length} listing pages as arrays`);
+    }
+
+    // Process all pages (listing + detail)
+    const pagesToProcess = shouldUseListingSchema ? listingPages : [...listingPages, ...detailPages];
+
+    for (const pageUrl of pagesToProcess) {
       try {
-        console.log(`Extracting structured data from: ${pageUrl}`);
+        // Determine if this is a listing page
+        const isListingPage = listingPages.includes(pageUrl);
+        const schemaToUse = isListingPage ? listingExtractionSchema : singleExtractionSchema;
+        const extractionType = isListingPage ? "listing (array)" : "detail (single)";
+        
+        console.log(`Extracting from ${extractionType} page: ${pageUrl}`);
         
         const scrapeResponse = await fetch(
           "https://api.firecrawl.dev/v1/scrape",
@@ -1185,7 +1284,7 @@ Deno.serve(async (req) => {
               url: pageUrl,
               formats: ["extract", "markdown"],
               extract: {
-                schema: extractionSchema,
+                schema: schemaToUse,
               },
             }),
           }
@@ -1200,9 +1299,6 @@ Deno.serve(async (req) => {
 
         const scrapeData = await scrapeResponse.json();
         
-        // Log full response for debugging
-        console.log(`Full Firecrawl response for ${pageUrl}:`, JSON.stringify(scrapeData));
-        
         // Extract data from the correct Firecrawl v1 response structure
         const extracted = scrapeData?.data?.extract || scrapeData?.extract;
         const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
@@ -1211,51 +1307,89 @@ Deno.serve(async (req) => {
           console.log(`Extracted data:`, JSON.stringify(extracted));
           console.log(`Markdown length: ${markdown?.length || 0} chars`);
           
-          // Map the structured data to our Investment type
-          let investment: Investment = {
-            name: cleanInvestmentName(extracted.company_name || ""),
-            industry: extracted.industry,
-            ceo: extracted.ceo,
-            investmentRole: extracted.investment_role,
-            ownership: extracted.ownership,
-            year: extracted.year_of_initial_investment,
-            location: extracted.location,
-            website: extracted.website,
-            status: extracted.status,
-            sourceUrl: pageUrl,
-            portfolioUrl: pageUrl,
-          };
+          // Handle listing page (array) vs detail page (single)
+          if (isListingPage && extracted.investments && Array.isArray(extracted.investments)) {
+            console.log(`Listing page extraction returned ${extracted.investments.length} investments`);
+            
+            for (const investmentData of extracted.investments) {
+              let investment: Investment = {
+                name: cleanInvestmentName(investmentData.company_name || ""),
+                industry: investmentData.industry,
+                ceo: investmentData.ceo,
+                investmentRole: investmentData.investment_role,
+                ownership: investmentData.ownership,
+                year: investmentData.year_of_initial_investment,
+                location: investmentData.location,
+                website: investmentData.website,
+                status: investmentData.status,
+                sourceUrl: pageUrl,
+                portfolioUrl: pageUrl,
+              };
 
-          // Apply fallback extraction for missing fields
-          investment = applyFallbackExtraction(investment, markdown);
-          
-          // Validate and calculate confidence
-          const validation = validateInvestment(investment);
-          console.log(`Extraction quality for ${investment.name}:`);
-          console.log(`  - Confidence: ${validation.confidence}%`);
-          console.log(`  - Missing fields: ${validation.missing.join(', ')}`);
-          console.log(`  - Method: AI + ${validation.missing.length < 8 ? 'fallback' : 'AI-only'}`);
-          
-          validationResults.push({
-            name: investment.name,
-            confidence: validation.confidence,
-            missing: validation.missing,
-          });
+              // Apply fallback extraction for missing fields
+              investment = applyFallbackExtraction(investment, markdown);
+              
+              // Validate and calculate confidence
+              const validation = validateInvestment(investment);
+              console.log(`  - ${investment.name}: ${validation.confidence}% confidence`);
+              
+              validationResults.push({
+                name: investment.name,
+                confidence: validation.confidence,
+                missing: validation.missing,
+              });
 
-          if (investment.name) {
-            allInvestments.push(investment);
+              if (investment.name) {
+                allInvestments.push(investment);
+              }
+            }
             successfulPages++;
-            console.log(`Successfully extracted: ${investment.name}`);
           } else {
-            console.warn(`Extraction returned empty name for ${pageUrl}`);
-            console.warn(`Full extraction data:`, JSON.stringify(extracted));
-            failedPages++;
+            // Single investment extraction (detail page)
+            let investment: Investment = {
+              name: cleanInvestmentName(extracted.company_name || ""),
+              industry: extracted.industry,
+              ceo: extracted.ceo,
+              investmentRole: extracted.investment_role,
+              ownership: extracted.ownership,
+              year: extracted.year_of_initial_investment,
+              location: extracted.location,
+              website: extracted.website,
+              status: extracted.status,
+              sourceUrl: pageUrl,
+              portfolioUrl: pageUrl,
+            };
+
+            // Apply fallback extraction for missing fields
+            investment = applyFallbackExtraction(investment, markdown);
+            
+            // Validate and calculate confidence
+            const validation = validateInvestment(investment);
+            console.log(`Extraction quality for ${investment.name}:`);
+            console.log(`  - Confidence: ${validation.confidence}%`);
+            console.log(`  - Missing fields: ${validation.missing.join(', ')}`);
+            console.log(`  - Method: ${isListingPage ? 'Listing array' : 'Detail page'} + fallback`);
+            
+            validationResults.push({
+              name: investment.name,
+              confidence: validation.confidence,
+              missing: validation.missing,
+            });
+
+            if (investment.name) {
+              allInvestments.push(investment);
+              successfulPages++;
+              console.log(`Successfully extracted: ${investment.name}`);
+            } else {
+              console.warn(`Extraction returned empty name for ${pageUrl}`);
+              console.warn(`Full extraction data:`, JSON.stringify(extracted));
+              failedPages++;
+            }
           }
         } else {
           console.warn(`No structured data extracted from ${pageUrl}`);
           console.warn(`Response success: ${scrapeData?.success}, has extract: ${!!extracted}`);
           console.warn(`Available keys: ${Object.keys(scrapeData || {}).join(', ')}`);
-          console.warn(`Full response:`, JSON.stringify(scrapeData));
           failedPages++;
         }
       } catch (error) {
