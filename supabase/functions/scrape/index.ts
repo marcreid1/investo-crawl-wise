@@ -714,6 +714,154 @@ function extractInvestmentData(page: CrawlData): Investment[] {
   }
 }
 
+// Validate investment completeness and calculate confidence score
+function validateInvestment(investment: Investment): { 
+  valid: boolean; 
+  confidence: number; 
+  missing: string[];
+  method: string;
+} {
+  const requiredFields = ['name'];
+  const optionalFields = ['industry', 'ceo', 'website', 'year', 'location', 'status', 'investmentRole', 'ownership'];
+  
+  const missing: string[] = [];
+  let filledOptional = 0;
+  
+  // Check required fields
+  requiredFields.forEach(field => {
+    if (!investment[field as keyof Investment]) {
+      missing.push(field);
+    }
+  });
+  
+  // Count filled optional fields
+  optionalFields.forEach(field => {
+    const value = investment[field as keyof Investment];
+    if (value && String(value).trim().length > 0) {
+      filledOptional++;
+    } else {
+      missing.push(field);
+    }
+  });
+  
+  // Calculate confidence (percentage of optional fields filled)
+  const confidence = Math.round((filledOptional / optionalFields.length) * 100);
+  
+  return {
+    valid: missing.length === 0,
+    confidence,
+    missing,
+    method: 'ai-extraction'
+  };
+}
+
+// Apply fallback extraction using markdown patterns
+function applyFallbackExtraction(investment: Investment, markdown?: string): Investment {
+  if (!markdown) return investment;
+  
+  console.log(`Applying fallback extraction for: ${investment.name}`);
+  
+  // CEO fallback patterns
+  if (!investment.ceo) {
+    const ceoPatterns = [
+      /(?:CEO|President|Chief Executive|Managing Director|President & CEO|President and CEO)[\s:]+([A-Za-z\s\-'\.]+?)(?:\n|##|<|$|\*\*)/i,
+    ];
+    
+    for (const pattern of ceoPatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1] && match[1].trim().length > 2 && match[1].trim().length < 50) {
+        investment.ceo = match[1].trim();
+        console.log(`  Fallback found CEO: ${investment.ceo}`);
+        break;
+      }
+    }
+  }
+  
+  // Industry fallback
+  if (!investment.industry) {
+    const industryPatterns = [
+      /(?:Industry|Sector|Category|Vertical|Business)[\s:]+([A-Za-z\s&,\/\.-]{3,50})(?:\n|$|<|##|\*\*)/i,
+    ];
+    
+    for (const pattern of industryPatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1]) {
+        investment.industry = match[1].trim();
+        console.log(`  Fallback found industry: ${investment.industry}`);
+        break;
+      }
+    }
+  }
+  
+  // Year fallback
+  if (!investment.year) {
+    const yearPatterns = [
+      /(?:Year\s+of\s+Initial\s+Investment|Investment\s+Year|Year Acquired|Initial Investment)[\s:]+(\d{4})/i,
+      /(?:Since|In)\s+(\d{4})/i,
+    ];
+    
+    for (const pattern of yearPatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1]) {
+        investment.year = match[1].trim();
+        console.log(`  Fallback found year: ${investment.year}`);
+        break;
+      }
+    }
+  }
+  
+  // Location fallback
+  if (!investment.location) {
+    const locationPatterns = [
+      /(?:Location|Headquarters|HQ|Based in)[\s:]+([A-Za-z\s,\-'\.]+?)(?:\n|$|##|\*\*)/i,
+    ];
+    
+    for (const pattern of locationPatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1] && match[1].trim().length > 2) {
+        investment.location = match[1].trim();
+        console.log(`  Fallback found location: ${investment.location}`);
+        break;
+      }
+    }
+  }
+  
+  // Website fallback
+  if (!investment.website) {
+    const websitePatterns = [
+      /(?:Website|Web|URL)[\s:]+<?([a-z]+:\/\/[^\s<>\n]+)>?/i,
+      /\[(?:Visit Website|Website|Company Site)\]\(([^)]+)\)/i,
+    ];
+    
+    for (const pattern of websitePatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1]) {
+        investment.website = match[1].trim();
+        console.log(`  Fallback found website: ${investment.website}`);
+        break;
+      }
+    }
+  }
+  
+  // Status fallback
+  if (!investment.status) {
+    const statusPatterns = [
+      /(?:Status|Investment Status)[\s:]+([A-Za-z\s()]+?)(?:\n|$|##|\*\*)/i,
+    ];
+    
+    for (const pattern of statusPatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1]) {
+        investment.status = match[1].trim();
+        console.log(`  Fallback found status: ${investment.status}`);
+        break;
+      }
+    }
+  }
+  
+  return investment;
+}
+
 // Deduplicate and merge investment data
 function deduplicateInvestments(allInvestments: Investment[]): Investment[] {
   const investmentMap = new Map<string, Investment>();
@@ -728,6 +876,13 @@ function deduplicateInvestments(allInvestments: Investment[]): Investment[] {
         name: existing.name,
         industry: existing.industry || investment.industry,
         date: existing.date || investment.date,
+        year: existing.year || investment.year,
+        ceo: existing.ceo || investment.ceo,
+        investmentRole: existing.investmentRole || investment.investmentRole,
+        ownership: existing.ownership || investment.ownership,
+        location: existing.location || investment.location,
+        website: existing.website || investment.website,
+        status: existing.status || investment.status,
         description: (existing.description && existing.description.length > (investment.description?.length || 0)) 
           ? existing.description 
           : investment.description,
@@ -805,42 +960,42 @@ Deno.serve(async (req) => {
       properties: {
         company_name: { 
           type: "string", 
-          description: "The name of the portfolio company." 
+          description: "The portfolio company name. Look for the page title, main heading, or text near 'Company:', 'Portfolio Company:', or 'Investment:'. Remove any suffixes like '– [Firm Name]'." 
         },
         industry: { 
           type: "string", 
-          description: "The primary industry or sector of the company." 
+          description: "Industry, sector, or vertical. Look for labels like 'Industry:', 'Sector:', 'Category:', 'Vertical:', 'Business:', or 'Market:'. Common values include Manufacturing, Healthcare, Technology, Financial Services, Energy Services, Distribution, etc." 
         },
         ceo: { 
           type: "string", 
-          description: "The name of the Chief Executive Officer or equivalent company leader." 
+          description: "CEO or company leader name. Look for 'CEO:', 'President:', 'President & CEO:', 'Chief Executive Officer:', 'Managing Director:', 'Founder:', or 'Leadership:'. Extract just the person's name, not their title." 
         },
         investment_role: { 
           type: "string", 
-          description: "The firm's role in the investment (e.g., lead investor, minority partner, strategic investor)." 
+          description: "The private equity firm's role in this investment. Look for '[Firm Name] Investment Role:', '[Firm Name] Role:', 'Investment Type:', or 'Transaction Type:'. Common values: 'Lead Investor', 'Co-Investor', 'Minority Partner', 'Strategic Investor', 'Control', 'Majority'." 
         },
         ownership: { 
           type: "string", 
-          description: "The ownership stake or percentage held in the company." 
+          description: "Ownership stake or control level. Look for '[Firm Name] Ownership:', 'Ownership:', 'Stake:', or 'Position:'. Common values: 'Control', 'Majority', 'Minority', 'Significant Minority', or percentage like '65%'." 
         },
         year_of_initial_investment: { 
           type: "string", 
-          description: "The year the firm first invested in the company." 
+          description: "Year of first investment. Look for 'Year of Initial Investment:', 'Investment Year:', 'Year Acquired:', 'Initial Investment:', or 'Since:'. Extract just the 4-digit year (e.g., '2019', '2021')." 
         },
         location: { 
           type: "string", 
-          description: "The headquarters city and province/state of the company." 
+          description: "Company headquarters location. Look for 'Location:', 'Headquarters:', 'HQ:', 'Based in:', or 'City:'. Include city and state/province (e.g., 'Toronto, ON', 'New York, NY')." 
         },
         website: { 
           type: "string", 
-          description: "The company's official website URL." 
+          description: "Company website URL. Look for 'Website:', 'Web:', 'URL:', links with text like 'Visit Website', or any link that appears to be the company's main domain. Return the full URL starting with http:// or https://." 
         },
         status: { 
           type: "string", 
-          description: "The investment status (e.g., Current, Realized, Exited)." 
+          description: "Investment status. Look for 'Status:', 'Investment Status:', or context clues. Common values: 'Current', 'Active', 'Exited', 'Realized', 'Divested', 'Sold', followed by year if exited (e.g., 'Exited (2020)')." 
         }
       },
-      required: ["company_name", "industry", "website"]
+      required: ["company_name"]
     };
 
     // First, crawl to discover all investment pages
@@ -1010,6 +1165,7 @@ Deno.serve(async (req) => {
     // Step 2: Use structured extraction on each discovered page
     console.log(`[${rid}] Step 2: Extracting structured data from ${discoveredUrls.length} discovered pages...`);
     const allInvestments: Investment[] = [];
+    const validationResults: any[] = [];
     let successfulPages = 0;
     let failedPages = 0;
 
@@ -1027,7 +1183,7 @@ Deno.serve(async (req) => {
             },
             body: JSON.stringify({
               url: pageUrl,
-              formats: ["extract"],
+              formats: ["extract", "markdown"],
               extract: {
                 schema: extractionSchema,
               },
@@ -1049,12 +1205,14 @@ Deno.serve(async (req) => {
         
         // Extract data from the correct Firecrawl v1 response structure
         const extracted = scrapeData?.data?.extract || scrapeData?.extract;
+        const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
 
         if (scrapeData?.success && extracted) {
           console.log(`Extracted data:`, JSON.stringify(extracted));
+          console.log(`Markdown length: ${markdown?.length || 0} chars`);
           
           // Map the structured data to our Investment type
-          const investment: Investment = {
+          let investment: Investment = {
             name: cleanInvestmentName(extracted.company_name || ""),
             industry: extracted.industry,
             ceo: extracted.ceo,
@@ -1067,6 +1225,22 @@ Deno.serve(async (req) => {
             sourceUrl: pageUrl,
             portfolioUrl: pageUrl,
           };
+
+          // Apply fallback extraction for missing fields
+          investment = applyFallbackExtraction(investment, markdown);
+          
+          // Validate and calculate confidence
+          const validation = validateInvestment(investment);
+          console.log(`Extraction quality for ${investment.name}:`);
+          console.log(`  - Confidence: ${validation.confidence}%`);
+          console.log(`  - Missing fields: ${validation.missing.join(', ')}`);
+          console.log(`  - Method: AI + ${validation.missing.length < 8 ? 'fallback' : 'AI-only'}`);
+          
+          validationResults.push({
+            name: investment.name,
+            confidence: validation.confidence,
+            missing: validation.missing,
+          });
 
           if (investment.name) {
             allInvestments.push(investment);
@@ -1091,6 +1265,17 @@ Deno.serve(async (req) => {
     }
 
     console.log(`Extraction summary: ${successfulPages} successful, ${failedPages} failed`);
+    
+    // Calculate average confidence
+    const avgConfidence = validationResults.length > 0
+      ? Math.round(validationResults.reduce((sum, v) => sum + v.confidence, 0) / validationResults.length)
+      : 0;
+    console.log(`Average extraction confidence: ${avgConfidence}%`);
+    
+    const incompleteInvestments = validationResults.filter(v => v.confidence < 70).length;
+    if (incompleteInvestments > 0) {
+      console.warn(`${incompleteInvestments} investments have confidence below 70%`);
+    }
 
     // Deduplicate investments
     console.log(`Deduplicating ${allInvestments.length} total investments...`);
@@ -1114,6 +1299,13 @@ Deno.serve(async (req) => {
         failedPages: failedPages || 0,
       },
       investments: cleanedInvestments || [],
+      extractionQuality: {
+        totalPages: discoveredUrls.length,
+        successfulExtractions: successfulPages,
+        averageConfidence: avgConfidence,
+        incompleteInvestments: incompleteInvestments,
+        extractionMethod: 'ai+fallback'
+      },
       metadata: {
         url: url,
         crawlDepth: crawlDepthValue,

@@ -39,6 +39,15 @@ interface ScrapeResponse {
     completed: number;
     total: number;
     creditsUsed: number;
+    successfulPages?: number;
+    failedPages?: number;
+  };
+  extractionQuality?: {
+    totalPages: number;
+    successfulExtractions: number;
+    averageConfidence: number;
+    incompleteInvestments: number;
+    extractionMethod: string;
   };
   investments?: Investment[];
   rawData?: any[];
@@ -333,7 +342,7 @@ const Index = () => {
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <div className="p-4 rounded-lg bg-gradient-subtle border shadow-sm">
                   <div className="text-2xl font-bold text-primary">{scrapeData.investments.length}</div>
                   <div className="text-sm text-muted-foreground">Investments Found</div>
@@ -346,6 +355,19 @@ const Index = () => {
                   <div className="text-2xl font-bold text-primary">{scrapeData.crawlStats?.creditsUsed}</div>
                   <div className="text-sm text-muted-foreground">Credits Used</div>
                 </div>
+                {scrapeData.extractionQuality && (
+                  <div className="p-4 rounded-lg bg-gradient-subtle border shadow-sm">
+                    <div className="text-2xl font-bold text-primary">{scrapeData.extractionQuality.averageConfidence}%</div>
+                    <div className="text-sm text-muted-foreground">
+                      Avg. Confidence
+                      {scrapeData.extractionQuality.incompleteInvestments > 0 && (
+                        <span className="block text-xs text-yellow-600 dark:text-yellow-500 mt-1">
+                          {scrapeData.extractionQuality.incompleteInvestments} incomplete
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <InvestmentTable investments={scrapeData.investments} />
