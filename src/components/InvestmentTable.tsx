@@ -170,7 +170,7 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
                     onClick={() => handleSort("investmentRole")}
                     className="hover:bg-muted-foreground/10 font-semibold flex items-center"
                   >
-                    Ironbridge Investment Role
+                    Investment Role
                     <SortIcon field="investmentRole" />
                   </Button>
                 </TableHead>
@@ -181,7 +181,7 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
                     onClick={() => handleSort("ownership")}
                     className="hover:bg-muted-foreground/10 font-semibold flex items-center"
                   >
-                    Ironbridge Ownership
+                    Ownership
                     <SortIcon field="ownership" />
                   </Button>
                 </TableHead>
