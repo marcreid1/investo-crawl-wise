@@ -52,6 +52,13 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
         return (
           inv.name.toLowerCase().includes(query) ||
           inv.industry?.toLowerCase().includes(query) ||
+          inv.ceo?.toLowerCase().includes(query) ||
+          inv.investmentRole?.toLowerCase().includes(query) ||
+          inv.ownership?.toLowerCase().includes(query) ||
+          inv.year?.toLowerCase().includes(query) ||
+          inv.location?.toLowerCase().includes(query) ||
+          inv.website?.toLowerCase().includes(query) ||
+          inv.status?.toLowerCase().includes(query) ||
           inv.description?.toLowerCase().includes(query) ||
           inv.date?.toLowerCase().includes(query) ||
           inv.partners?.some(p => p.toLowerCase().includes(query))
@@ -149,23 +156,77 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleSort("date")}
+                    onClick={() => handleSort("ceo")}
                     className="hover:bg-muted-foreground/10 font-semibold flex items-center"
                   >
-                    Date
-                    <SortIcon field="date" />
+                    CEO
+                    <SortIcon field="ceo" />
                   </Button>
                 </TableHead>
-                <TableHead className="font-semibold">Description</TableHead>
                 <TableHead>
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => handleSort("partners")}
+                    onClick={() => handleSort("investmentRole")}
                     className="hover:bg-muted-foreground/10 font-semibold flex items-center"
                   >
-                    Partners
-                    <SortIcon field="partners" />
+                    Ironbridge Investment Role
+                    <SortIcon field="investmentRole" />
+                  </Button>
+                </TableHead>
+                <TableHead>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleSort("ownership")}
+                    className="hover:bg-muted-foreground/10 font-semibold flex items-center"
+                  >
+                    Ironbridge Ownership
+                    <SortIcon field="ownership" />
+                  </Button>
+                </TableHead>
+                <TableHead>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleSort("year")}
+                    className="hover:bg-muted-foreground/10 font-semibold flex items-center"
+                  >
+                    Year of Initial Investment
+                    <SortIcon field="year" />
+                  </Button>
+                </TableHead>
+                <TableHead>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleSort("location")}
+                    className="hover:bg-muted-foreground/10 font-semibold flex items-center"
+                  >
+                    Location
+                    <SortIcon field="location" />
+                  </Button>
+                </TableHead>
+                <TableHead>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleSort("website")}
+                    className="hover:bg-muted-foreground/10 font-semibold flex items-center"
+                  >
+                    Website
+                    <SortIcon field="website" />
+                  </Button>
+                </TableHead>
+                <TableHead>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleSort("status")}
+                    className="hover:bg-muted-foreground/10 font-semibold flex items-center"
+                  >
+                    Status
+                    <SortIcon field="status" />
                   </Button>
                 </TableHead>
                 <TableHead className="font-semibold">Link</TableHead>
@@ -174,7 +235,7 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
             <TableBody>
               {filteredAndSortedInvestments.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                     No investments match your search
                   </TableCell>
                 </TableRow>
@@ -194,22 +255,39 @@ export const InvestmentTable = ({ investments }: InvestmentTableProps) => {
                       )}
                     </TableCell>
                     <TableCell className="text-sm">
-                      {investment.date || <span className="text-muted-foreground">—</span>}
+                      {investment.ceo || <span className="text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="max-w-md">
-                      <div className="text-sm text-muted-foreground line-clamp-2">
-                        {investment.description || "—"}
-                      </div>
+                    <TableCell className="text-sm">
+                      {investment.investmentRole || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {investment.ownership || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {investment.year || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {investment.location || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {investment.website ? (
+                        <a
+                          href={investment.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline truncate block max-w-[150px]"
+                        >
+                          {investment.website.replace(/^https?:\/\//, '')}
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
-                      {investment.partners && investment.partners.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {investment.partners.map((partner, idx) => (
-                            <Badge key={idx} variant="outline" className="text-xs">
-                              {partner}
-                            </Badge>
-                          ))}
-                        </div>
+                      {investment.status ? (
+                        <Badge variant={investment.status.toLowerCase().includes('current') ? 'default' : 'outline'} className="text-xs">
+                          {investment.status}
+                        </Badge>
                       ) : (
                         <span className="text-muted-foreground text-sm">—</span>
                       )}

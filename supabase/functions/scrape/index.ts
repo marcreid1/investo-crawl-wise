@@ -132,21 +132,21 @@ function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
       }
       
       // Look for CEO
-      const ceoMatches = htmlText.match(/<(?:div|span|p)[^>]*(?:class|id)="[^"]*(?:ceo|president|executive)[^"]*"[^>]*>([^<]+)<|(?:CEO|President|Chief Executive)[\s:]+<[^>]*>([^<]+)</i);
+      const ceoMatches = htmlText.match(/(?:CEO|President|Chief Executive)[\s:]+([A-Za-z\s\-'\.]+?)(?:<|$|\n|##)/i);
       if (ceoMatches) {
-        investment.ceo = (ceoMatches[1] || ceoMatches[2] || '').trim();
+        investment.ceo = ceoMatches[1].trim();
         console.log(`Found CEO: ${investment.ceo}`);
       }
       
       // Look for Investment Role
-      const roleMatches = htmlText.match(/(?:Ironbridge\s+Investment\s+Role|Investment\s+Role|Role)[\s:]+([A-Za-z\s]+(?:Investor|Partner|Lead))/i);
+      const roleMatches = htmlText.match(/(?:Ironbridge\s+Investment\s+Role|Investment\s+Role)[\s:]+([A-Za-z\s]+?)(?:<|$|\n|##)/i);
       if (roleMatches) {
         investment.investmentRole = roleMatches[1].trim();
         console.log(`Found investment role: ${investment.investmentRole}`);
       }
       
       // Look for Ownership
-      const ownershipMatches = htmlText.match(/(?:Ironbridge\s+Ownership|Ownership)[\s:]+([A-Za-z\s]+(?:Control|Minority|Majority))/i);
+      const ownershipMatches = htmlText.match(/(?:Ironbridge\s+Ownership|Ownership)[\s:]+([A-Za-z\s]+?)(?:<|$|\n|##)/i);
       if (ownershipMatches) {
         investment.ownership = ownershipMatches[1].trim();
         console.log(`Found ownership: ${investment.ownership}`);
@@ -167,21 +167,21 @@ function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
       }
       
       // Look for Location
-      const locationMatches = htmlText.match(/(?:Location|Headquarters|Address)[\s:]+([A-Za-z\s,]+(?:ON|QC|BC|AB|MB|SK|NS|NB|PE|NL|YT|NT|NU|Canada|USA|United States))/i);
+      const locationMatches = htmlText.match(/(?:Location|Headquarters|Address)[\s:]+([A-Za-z\s,\-'\.]+?)(?:<|$|\n|##)/i);
       if (locationMatches) {
         investment.location = locationMatches[1].trim();
         console.log(`Found location: ${investment.location}`);
       }
       
-      // Look for Website
-      const websiteMatches = htmlText.match(/(?:Website|URL|Web|Link)[\s:]+<a[^>]*href="([^"]+)"|(?:Website|URL)[\s:]+([a-z]+:\/\/[^\s<]+)/i);
+      // Look for Website (URL)
+      const websiteMatches = htmlText.match(/(?:Website)[\s:]+<?([a-z]+:\/\/[^\s<>\n]+)>?/i);
       if (websiteMatches) {
-        investment.website = (websiteMatches[1] || websiteMatches[2] || '').trim();
+        investment.website = websiteMatches[1].trim();
         console.log(`Found website: ${investment.website}`);
       }
       
       // Look for Status
-      const statusMatches = htmlText.match(/(?:Status|Investment\s+Status)[\s:]+([A-Za-z\s]+(?:Current|Exited|Active|Past))/i);
+      const statusMatches = htmlText.match(/(?:Status|Investment\s+Status)[\s:]+([A-Za-z\s]+?)(?:<|$|\n|##)/i);
       if (statusMatches) {
         investment.status = statusMatches[1].trim();
         console.log(`Found status: ${investment.status}`);
@@ -418,8 +418,8 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       
       // Extract CEO
       const ceoPatterns = [
-        /(?:CEO|Chief Executive Officer|President)[\s:]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
-        /\*\*(?:CEO|President)\*\*[\s:]+([A-Z][a-z\s]+)/i,
+        /(?:CEO|Chief Executive Officer|President)[\s:]+([A-Za-z\s\-'\.]+?)(?:\n|$|##|\*\*)/i,
+        /\*\*(?:CEO|President)\*\*[\s:]+([A-Za-z\s\-'\.]+?)(?:\n|$|##)/i,
       ];
       
       for (const pattern of ceoPatterns) {
@@ -433,8 +433,8 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       
       // Extract Investment Role
       const rolePatterns = [
-        /(?:Ironbridge\s+Investment\s+Role|Investment\s+Role)[\s:]+([A-Za-z\s]+(?:Investor|Partner|Lead))/i,
-        /\*\*(?:Investment\s+Role)\*\*[\s:]+([A-Za-z\s]+)/i,
+        /(?:Ironbridge\s+Investment\s+Role|Investment\s+Role)[\s:]+([A-Za-z\s]+?)(?:\n|$|##|\*\*)/i,
+        /\*\*(?:Investment\s+Role|Ironbridge\s+Investment\s+Role)\*\*[\s:]+([A-Za-z\s]+?)(?:\n|$|##)/i,
       ];
       
       for (const pattern of rolePatterns) {
@@ -448,8 +448,8 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       
       // Extract Ownership
       const ownershipPatterns = [
-        /(?:Ironbridge\s+Ownership|Ownership)[\s:]+([A-Za-z\s]+(?:Control|Minority|Majority))/i,
-        /\*\*(?:Ownership)\*\*[\s:]+([A-Za-z\s]+)/i,
+        /(?:Ironbridge\s+Ownership|Ownership)[\s:]+([A-Za-z\s]+?)(?:\n|$|##|\*\*)/i,
+        /\*\*(?:Ownership|Ironbridge\s+Ownership)\*\*[\s:]+([A-Za-z\s]+?)(?:\n|$|##)/i,
       ];
       
       for (const pattern of ownershipPatterns) {
@@ -495,8 +495,8 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       
       // Extract Location
       const locationPatterns = [
-        /(?:Location|Headquarters|Address)[\s:]+([A-Za-z\s,]+(?:ON|QC|BC|AB|MB|SK|NS|NB|PE|NL|YT|NT|NU|Canada|USA|United States))/i,
-        /\*\*(?:Location)\*\*[\s:]+([A-Za-z\s,]+)/i,
+        /(?:Location|Headquarters|Address)[\s:]+([A-Za-z\s,\-'\.]+?)(?:\n|$|##|\*\*)/i,
+        /\*\*(?:Location|Headquarters)\*\*[\s:]+([A-Za-z\s,\-'\.]+?)(?:\n|$|##)/i,
       ];
       
       for (const pattern of locationPatterns) {
@@ -510,8 +510,8 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       
       // Extract Website
       const websitePatterns = [
-        /(?:Website|URL)[\s:]+([a-z]+:\/\/[^\s<\n]+)/i,
-        /\*\*(?:Website)\*\*[\s:]+([a-z]+:\/\/[^\s<\n]+)/i,
+        /(?:Website)[\s:]+<?([a-z]+:\/\/[^\s<>\n]+)>?/i,
+        /\*\*(?:Website)\*\*[\s:]+<?([a-z]+:\/\/[^\s<>\n]+)>?/i,
       ];
       
       for (const pattern of websitePatterns) {
@@ -525,8 +525,8 @@ function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       
       // Extract Status
       const statusPatterns = [
-        /(?:Status|Investment\s+Status)[\s:]+([A-Za-z\s]+(?:Current|Exited|Active|Past))/i,
-        /\*\*(?:Status)\*\*[\s:]+([A-Za-z]+)/i,
+        /(?:Status|Investment\s+Status)[\s:]+([A-Za-z\s]+?)(?:\n|$|##|\*\*)/i,
+        /\*\*(?:Status|Investment\s+Status)\*\*[\s:]+([A-Za-z\s]+?)(?:\n|$|##)/i,
       ];
       
       for (const pattern of statusPatterns) {

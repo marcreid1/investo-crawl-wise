@@ -15,6 +15,13 @@ import { getSettings } from "@/lib/settings";
 export interface Investment {
   name: string;
   industry?: string;
+  ceo?: string;
+  investmentRole?: string;
+  ownership?: string;
+  year?: string;
+  location?: string;
+  website?: string;
+  status?: string;
   date?: string;
   description?: string;
   partners?: string[];
