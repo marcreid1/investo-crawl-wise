@@ -750,12 +750,20 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { url, crawlDepth, depth, renderJs, maxPages } = await req.json();
+    const { url, crawlDepth, depth, renderJs, maxPages, requestId } = await req.json();
+
+    const rid = requestId || crypto.randomUUID();
+    console.log(`[${rid}] Request received for URL: ${url}`);
 
     if (!url || typeof url !== "string") {
-      console.error("Invalid URL provided:", url);
+      console.error(`[${rid}] Invalid URL provided:`, url);
       return new Response(
-        JSON.stringify({ success: false, error: "Valid URL is required" }),
+        JSON.stringify({ 
+          success: false, 
+          error: "Valid URL is required",
+          stage: "validation",
+          statusCode: 400
+        }),
         {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -769,11 +777,13 @@ Deno.serve(async (req) => {
 
     const apiKey = Deno.env.get("FIRECRAWL_API_KEY");
     if (!apiKey) {
-      console.error("FIRECRAWL_API_KEY not configured");
+      console.error(`[${rid}] FIRECRAWL_API_KEY not configured`);
       return new Response(
         JSON.stringify({
           success: false,
           error: "API key not configured",
+          stage: "init",
+          statusCode: 500
         }),
         {
           status: 500,
@@ -782,10 +792,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log("Starting crawl for URL:", url);
-    console.log(`Crawling with depth: ${crawlDepthValue}`);
-    console.log(`Maximum pages: ${maxPagesValue}`);
-    console.log(`JavaScript rendering: ${renderJs ? 'enabled' : 'disabled'}`);
+    console.log(`[${rid}] Starting crawl for URL:`, url);
+    console.log(`[${rid}] Crawling with depth: ${crawlDepthValue}`);
+    console.log(`[${rid}] Maximum pages: ${maxPagesValue}`);
+    console.log(`[${rid}] JavaScript rendering: ${renderJs ? 'enabled' : 'disabled'}`);
 
     // Use structured extraction mode
     console.log("Using Firecrawl structured extraction mode");
@@ -859,14 +869,27 @@ Deno.serve(async (req) => {
 
     if (!crawlInitResponse.ok) {
       const errorText = await crawlInitResponse.text();
-      console.error("Firecrawl crawl API error:", crawlInitResponse.status, errorText);
+      const status = crawlInitResponse.status;
+      console.error(`[${rid}] Firecrawl crawl API error: HTTP ${status}`, errorText);
+      
+      let errorMessage = `Firecrawl API error: ${errorText.substring(0, 200)}`;
+      if (status === 401 || status === 403) {
+        errorMessage = "Authentication failed - invalid or missing API key";
+      } else if (status === 402) {
+        errorMessage = "Out of API credits - please add more credits";
+      } else if (status === 429) {
+        errorMessage = "Rate limited - please retry later";
+      }
+      
       return new Response(
         JSON.stringify({
           success: false,
-          error: `Firecrawl crawl API error: ${errorText}`,
+          error: errorMessage,
+          stage: "crawl-init",
+          statusCode: status
         }),
         {
-          status: 500,
+          status: status,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
@@ -891,10 +914,10 @@ Deno.serve(async (req) => {
     const jobId = crawlInitData.id;
     console.log("Crawl job initiated with ID:", jobId);
 
-    // Poll for crawl completion
+    // Poll for crawl completion with reduced timeout budget
     let crawlComplete = false;
     let discoveredUrls: string[] = [];
-    const maxAttempts = 60; // Poll for up to 2 minutes
+    const maxAttempts = 30; // Poll for up to 60 seconds (30 * 2s)
     let attempts = 0;
 
     while (!crawlComplete && attempts < maxAttempts) {
@@ -920,23 +943,33 @@ Deno.serve(async (req) => {
 
       try {
         const crawlData = await statusResponse.json();
-        console.log(`Crawl status (attempt ${attempts}/${maxAttempts}):`, crawlData?.status, `- Completed: ${crawlData?.completed || 0}/${crawlData?.total || 0}`);
+        console.log(`[${rid}] Crawl status (attempt ${attempts}/${maxAttempts}):`, crawlData?.status, `- Completed: ${crawlData?.completed || 0}/${crawlData?.total || 0}`);
+        
+        // Collect URLs incrementally as they become available
+        if (crawlData.data && crawlData.data.length > 0) {
+          const newUrls = crawlData.data
+            .map((page: any) => page.metadata?.url)
+            .filter((url: string) => url && (url.includes('/investment') || url.includes('/portfolio') || url.includes('/company')));
+          
+          // Merge with existing URLs (deduplicate)
+          const uniqueUrls = [...new Set([...discoveredUrls, ...newUrls])];
+          if (uniqueUrls.length > discoveredUrls.length) {
+            console.log(`[${rid}] Incrementally discovered ${uniqueUrls.length - discoveredUrls.length} new URLs`);
+            discoveredUrls = uniqueUrls;
+          }
+        }
         
         if (crawlData?.status === "completed") {
           crawlComplete = true;
-          // Extract URLs from crawled pages
-          if (crawlData.data && crawlData.data.length > 0) {
-            discoveredUrls = crawlData.data
-              .map((page: any) => page.metadata?.url)
-              .filter((url: string) => url && (url.includes('/investment') || url.includes('/portfolio') || url.includes('/company')));
-          }
-          console.log(`Discovered ${discoveredUrls.length} investment pages`);
+          console.log(`[${rid}] Crawl completed with ${discoveredUrls.length} investment pages`);
         } else if (crawlData?.status === "failed") {
-          console.error("Crawl job failed");
+          console.error(`[${rid}] Crawl job failed`);
           return new Response(
             JSON.stringify({
               success: false,
               error: "Crawl job failed",
+              stage: "crawl-status",
+              statusCode: 500
             }),
             {
               status: 500,
@@ -945,17 +978,26 @@ Deno.serve(async (req) => {
           );
         }
       } catch (jsonError) {
-        console.error(`Failed to parse status response JSON (attempt ${attempts}):`, jsonError);
+        console.error(`[${rid}] Failed to parse status response JSON (attempt ${attempts}):`, jsonError);
         continue;
       }
     }
 
-    if (!crawlComplete) {
-      console.error(`Crawl timeout after ${attempts} attempts (${attempts * 2} seconds)`);
+    // Handle timeout with partial results
+    const isPartial = !crawlComplete;
+    if (isPartial) {
+      console.warn(`[${rid}] Crawl timeout after ${attempts} attempts (${attempts * 2}s), proceeding with ${discoveredUrls.length} partial URLs`);
+    }
+    
+    // If we have no URLs at all, return error
+    if (discoveredUrls.length === 0) {
+      console.error(`[${rid}] No URLs discovered after timeout`);
       return new Response(
         JSON.stringify({
           success: false,
-          error: `Crawl job timed out after ${attempts * 2} seconds`,
+          error: `Crawl job timed out after ${attempts * 2} seconds with no results`,
+          stage: "crawl-status",
+          statusCode: 408,
           attemptsMade: attempts,
         }),
         {
@@ -966,7 +1008,7 @@ Deno.serve(async (req) => {
     }
 
     // Step 2: Use structured extraction on each discovered page
-    console.log("Step 2: Extracting structured data from discovered pages...");
+    console.log(`[${rid}] Step 2: Extracting structured data from ${discoveredUrls.length} discovered pages...`);
     const allInvestments: Investment[] = [];
     let successfulPages = 0;
     let failedPages = 0;
@@ -1063,6 +1105,7 @@ Deno.serve(async (req) => {
     // Always return structured JSON with data even if empty
     const responseData = {
       success: true,
+      partial: isPartial,
       crawlStats: {
         completed: discoveredUrls.length || 0,
         total: discoveredUrls.length || 0,
@@ -1078,10 +1121,11 @@ Deno.serve(async (req) => {
         renderJs: renderJs || false,
         extractionMode: "structured",
         timestamp: new Date().toISOString(),
+        requestId: rid,
       },
     };
 
-    console.log("Returning response with", cleanedInvestments.length, "investments");
+    console.log(`[${rid}] Returning response with ${cleanedInvestments.length} investments (partial: ${isPartial})`);
 
     // Save to history database in background (don't await)
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -1135,6 +1179,8 @@ Deno.serve(async (req) => {
         success: false,
         error: error instanceof Error ? error.message : "Internal server error",
         errorType: error instanceof Error ? error.name : "Unknown",
+        stage: "unknown",
+        statusCode: 500,
         crawlStats: {
           completed: 0,
           total: 0,

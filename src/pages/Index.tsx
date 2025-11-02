@@ -31,6 +31,10 @@ export interface Investment {
 
 interface ScrapeResponse {
   success: boolean;
+  partial?: boolean;
+  statusCode?: number;
+  stage?: string;
+  error?: string;
   crawlStats?: {
     completed: number;
     total: number;
@@ -57,7 +61,7 @@ const Index = () => {
     }
   };
 
-  const handleStartScraping = async () => {
+  const handleStartScraping = async (quickMode = false) => {
     const trimmedUrl = url.trim();
     
     if (!trimmedUrl) {
@@ -82,14 +86,20 @@ const Index = () => {
     setScrapeData(null);
 
     try {
-      const settings = getSettings();
+      const settings = quickMode 
+        ? { crawlDepth: 1, maxPages: 25, renderJs: false, outputFormat: 'excel' as const, enableCompanyTags: false }
+        : getSettings();
+      
+      const requestId = crypto.randomUUID();
+      console.log(`Starting scrape with requestId: ${requestId}`);
       
       const { data, error } = await supabase.functions.invoke('scrape', {
         body: { 
           url: trimmedUrl,
           crawlDepth: settings.crawlDepth,
           renderJs: settings.renderJs,
-          maxPages: settings.maxPages
+          maxPages: settings.maxPages,
+          requestId
         }
       });
 
@@ -100,7 +110,13 @@ const Index = () => {
       if (data?.success) {
         setScrapeData(data);
         
-        if (data.investments && data.investments.length > 0) {
+        if (data.partial) {
+          toast({
+            title: "⚠️ Partial Results",
+            description: `Extracted ${data.investments?.length || 0} investments, but scraping timed out. Try lowering crawl depth in Settings.`,
+            variant: "destructive",
+          });
+        } else if (data.investments && data.investments.length > 0) {
           toast({
             title: "✅ Scraping Complete!",
             description: `Extracted ${data.investments.length} investments from ${data.crawlStats?.completed || 0} pages`,
@@ -113,7 +129,24 @@ const Index = () => {
           });
         }
       } else {
-        throw new Error(data?.error || "Failed to scrape website");
+        const errorMsg = data?.error || "Failed to scrape website";
+        const statusCode = data?.statusCode;
+        const stage = data?.stage;
+        
+        let description = errorMsg;
+        if (statusCode === 401 || statusCode === 403) {
+          description = "API authentication failed. Please check your API key configuration.";
+        } else if (statusCode === 402) {
+          description = "Out of API credits. Please add more credits to continue.";
+        } else if (statusCode === 429) {
+          description = "Rate limited by API. Please wait and try again later.";
+        } else if (statusCode === 408) {
+          description = `Scraping timed out at ${stage || 'unknown'} stage. Try reducing Crawl Depth or Max Pages in Settings.`;
+        } else if (stage) {
+          description = `${errorMsg} (failed at: ${stage})`;
+        }
+        
+        throw new Error(description);
       }
     } catch (error) {
       console.error("Scraping error:", error);
@@ -125,6 +158,11 @@ const Index = () => {
     } finally {
       setIsScraperRunning(false);
     }
+  };
+
+  const handleTestUrl = () => {
+    setUrl("https://ironbridgeequity.com/investments");
+    setTimeout(() => handleStartScraping(true), 100);
   };
 
   const handleExportToExcel = () => {
@@ -215,20 +253,31 @@ const Index = () => {
                     disabled={isScraperRunning}
                   />
                 </div>
-                <Button 
-                  onClick={handleStartScraping}
-                  disabled={!url.trim() || isScraperRunning}
-                  className="bg-gradient-primary hover:opacity-90 transition-opacity shadow-elegant"
-                >
-                  {isScraperRunning ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground mr-2" />
-                      Scraping...
-                    </>
-                  ) : (
-                    "Start Scraping"
-                  )}
-                </Button>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline"
+                    size="sm"
+                    onClick={handleTestUrl}
+                    disabled={isScraperRunning}
+                    className="whitespace-nowrap"
+                  >
+                    Test Known URL
+                  </Button>
+                  <Button 
+                    onClick={() => handleStartScraping(false)}
+                    disabled={!url.trim() || isScraperRunning}
+                    className="bg-gradient-primary hover:opacity-90 transition-opacity shadow-elegant"
+                  >
+                    {isScraperRunning ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground mr-2" />
+                        Scraping...
+                      </>
+                    ) : (
+                      "Start Scraping"
+                    )}
+                  </Button>
+                </div>
               </div>
             </div>
             <div className="flex items-start gap-2 text-sm text-muted-foreground">
@@ -263,6 +312,27 @@ const Index = () => {
             <EmptyState isLoading={isScraperRunning} />
           ) : scrapeData.investments && scrapeData.investments.length > 0 ? (
             <>
+              {scrapeData.partial && (
+                <div className="mb-4 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="font-medium text-yellow-900 dark:text-yellow-200">Partial Results Returned</p>
+                      <p className="text-sm text-yellow-800 dark:text-yellow-300 mt-1">
+                        The scrape timed out, but we collected some data. For better results, try lowering Crawl Depth or Max Pages in Settings, or use Quick Mode below.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleStartScraping(true)}
+                        className="mt-3 border-yellow-300 dark:border-yellow-700"
+                      >
+                        Try Quick Mode
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div className="p-4 rounded-lg bg-gradient-subtle border shadow-sm">
                   <div className="text-2xl font-bold text-primary">{scrapeData.investments.length}</div>
@@ -283,9 +353,16 @@ const Index = () => {
           ) : (
             <div className="text-center py-8">
               <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground mb-4">
                 No investments found in the scraped pages. Try a different URL or ensure the page contains investment information.
               </p>
+              <Button
+                variant="outline"
+                onClick={() => handleStartScraping(true)}
+                disabled={isScraperRunning}
+              >
+                Try Quick Mode
+              </Button>
             </div>
           )}
         </Card>
