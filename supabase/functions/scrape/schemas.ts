@@ -37,29 +37,29 @@ export const listingExtractionSchema = {
   properties: {
     investments: {
       type: "array",
-      description: "Array of ALL portfolio companies visible on this page",
+      description: "Array of ALL portfolio companies visible on this page. IMPORTANT: Extract company name even if no other details are visible (e.g., if page only shows logos and names). For image-grid portfolios showing only company names and logos, extract just the names.",
       items: {
         type: "object",
         properties: {
           company: {
             type: "object",
             properties: {
-              name: { type: "string", description: "Portfolio company name for THIS SPECIFIC COMPANY ONLY" },
-              industry: { type: "string", description: "Industry for THIS SPECIFIC COMPANY ONLY" },
-              location: { type: "string", description: "Headquarters for THIS SPECIFIC COMPANY ONLY" },
-              website: { type: "string", description: "Website for THIS SPECIFIC COMPANY ONLY" },
-              ceo: { type: "string", description: "CEO for THIS SPECIFIC COMPANY ONLY" },
-              description: { type: "string", description: "Description for THIS SPECIFIC COMPANY ONLY" }
+              name: { type: "string", description: "Portfolio company name for THIS SPECIFIC COMPANY ONLY (REQUIRED - extract even if no other data is available)" },
+              industry: { type: "string", description: "Industry for THIS SPECIFIC COMPANY ONLY (optional)" },
+              location: { type: "string", description: "Headquarters for THIS SPECIFIC COMPANY ONLY (optional)" },
+              website: { type: "string", description: "Website for THIS SPECIFIC COMPANY ONLY (optional)" },
+              ceo: { type: "string", description: "CEO for THIS SPECIFIC COMPANY ONLY (optional)" },
+              description: { type: "string", description: "Description for THIS SPECIFIC COMPANY ONLY (optional)" }
             },
             required: ["name"]
           },
           investment: {
             type: "object",
             properties: {
-              role: { type: "string", description: "Investment role for THIS SPECIFIC COMPANY" },
-              ownership: { type: "string", description: "Ownership for THIS SPECIFIC COMPANY" },
-              year_of_initial_investment: { type: "string", description: "Year for THIS SPECIFIC COMPANY" },
-              status: { type: "string", description: "Status for THIS SPECIFIC COMPANY" }
+              role: { type: "string", description: "Investment role for THIS SPECIFIC COMPANY (optional)" },
+              ownership: { type: "string", description: "Ownership for THIS SPECIFIC COMPANY (optional)" },
+              year_of_initial_investment: { type: "string", description: "Year for THIS SPECIFIC COMPANY (optional)" },
+              status: { type: "string", description: "Status for THIS SPECIFIC COMPANY (optional)" }
             }
           }
         },

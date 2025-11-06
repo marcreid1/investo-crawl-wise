@@ -322,6 +322,80 @@ Deno.serve(async (req) => {
               const pageData = { markdown: fallbackMarkdown || "", html: fallbackHtml || "", metadata: { url: pageUrl } };
               let fallbackInvestments = extractInvestmentData(pageData);
               
+              // Check if this is an image-grid listing page with minimal data
+              if (!isDetailPage(pageUrl) && fallbackInvestments.length >= 5) {
+                const hasMinimalData = fallbackInvestments.every(inv => !inv.industry && !inv.year && !inv.ceo);
+                
+                if (hasMinimalData && fallbackHtml) {
+                  console.log(`[${rid}] Detected image-grid listing with ${fallbackInvestments.length} companies - attempting detail page discovery...`);
+                  
+                  // Import the extraction function
+                  const { extractDetailLinksFromMarkdown } = await import("./extraction.ts");
+                  const detailPageUrls = extractDetailLinksFromMarkdown(fallbackMarkdown || "", fallbackHtml, pageUrl);
+                  
+                  if (detailPageUrls.length > 0) {
+                    console.log(`[${rid}] Found ${detailPageUrls.length} detail page URLs - initiating second-pass crawl...`);
+                    
+                    // Process detail pages to enrich data (limit to 20 for performance)
+                    for (const detailUrl of detailPageUrls.slice(0, 20)) {
+                      try {
+                        const detailCached = await getCachedResponse(supabaseUrl, supabaseKey, detailUrl, 'scrape-markdown');
+                        let detailData;
+                        
+                        if (detailCached) {
+                          detailData = detailCached;
+                          cacheStats.hits++;
+                        } else {
+                          cacheStats.misses++;
+                          const detailResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+                            method: "POST",
+                            headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              url: detailUrl,
+                              formats: ["markdown", "html"],
+                              onlyMainContent: true,
+                              waitFor: 2000,
+                              timeout: 25000,
+                            }),
+                          });
+                          
+                          if (detailResponse.ok) {
+                            detailData = await detailResponse.json();
+                            await saveCachedResponse(supabaseUrl, supabaseKey, detailUrl, 'scrape-markdown', detailData);
+                          }
+                        }
+                        
+                        if (detailData) {
+                          const detailMarkdown = detailData?.data?.markdown || detailData?.markdown || "";
+                          const detailHtml = detailData?.data?.html || detailData?.html || "";
+                          const detailPageData = { markdown: detailMarkdown, html: detailHtml, metadata: { url: detailUrl } };
+                          const detailInvestments = extractInvestmentData(detailPageData);
+                          
+                          if (detailInvestments.length > 0) {
+                            // Merge detail data into original investments
+                            const detailInv = detailInvestments[0];
+                            const matchingInv = fallbackInvestments.find(inv => 
+                              inv.name.toLowerCase().includes(detailInv.name.toLowerCase()) ||
+                              detailInv.name.toLowerCase().includes(inv.name.toLowerCase())
+                            );
+                            
+                            if (matchingInv) {
+                              Object.assign(matchingInv, {
+                                ...detailInv,
+                                name: matchingInv.name, // Keep original name
+                              });
+                              console.log(`[${rid}] ✓ Enriched ${matchingInv.name} with detail page data`);
+                            }
+                          }
+                        }
+                      } catch (detailError) {
+                        console.error(`[${rid}] Error processing detail page ${detailUrl}:`, detailError);
+                      }
+                    }
+                  }
+                }
+              }
+              
               if (!isDetailPage(pageUrl) && fallbackInvestments.length < 3 && fallbackHtml) {
                 const harvested = harvestDetailLinksFromHTML(fallbackHtml, pageUrl, maxPagesValue);
                 fallbackInvestments = fallbackInvestments.concat(harvested.internal.map(link => ({

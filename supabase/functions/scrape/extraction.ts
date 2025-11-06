@@ -682,7 +682,119 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
 }
 
 /**
- * Main extraction orchestrator - tries HTML first, falls back to text
+ * Detects and extracts company names from image-grid portfolio format
+ * Common pattern: ![](logo.png)\n\nCompany Name
+ */
+export function extractFromImageGrid(markdown: string, pageUrl: string): Investment[] {
+  if (!markdown) return [];
+  
+  const investments: Investment[] = [];
+  
+  // Pattern 1: Image followed by company name (markdown format)
+  // ![](url)\n\nCompany Name
+  const imageGridPattern = /!\[[^\]]*\]\([^)]+\)\s*\n\s*([A-Z][A-Za-z0-9\s&,.''\-]+)/g;
+  const matches = [...markdown.matchAll(imageGridPattern)];
+  
+  if (matches.length >= 5) {
+    console.log(`Detected image-grid format with ${matches.length} companies`);
+    
+    matches.forEach(match => {
+      const name = match[1].trim().split('\n')[0].trim();
+      if (name && name.length > 2 && name.length < 100) {
+        investments.push({
+          name: cleanInvestmentName(name),
+          sourceUrl: pageUrl,
+          portfolioUrl: pageUrl,
+        });
+      }
+    });
+    
+    console.log(`Extracted ${investments.length} company names from image-grid`);
+    return investments;
+  }
+  
+  return [];
+}
+
+/**
+ * Extracts detail page links from listing page markdown
+ * Pattern: [Company Name](url) or <a href="url">Company Name</a>
+ */
+export function extractDetailLinksFromMarkdown(markdown: string, html: string, baseUrl: string): string[] {
+  const detailUrls = new Set<string>();
+  const base = new URL(baseUrl);
+  
+  // Pattern 1: Markdown links [Text](url)
+  const markdownLinkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let match;
+  
+  while ((match = markdownLinkPattern.exec(markdown)) !== null) {
+    const href = match[2];
+    const text = match[1];
+    
+    try {
+      let absoluteUrl: string;
+      if (href.startsWith('http')) {
+        absoluteUrl = href;
+      } else if (href.startsWith('/')) {
+        absoluteUrl = `${base.origin}${href}`;
+      } else {
+        continue;
+      }
+      
+      const url = new URL(absoluteUrl);
+      const path = url.pathname.toLowerCase();
+      
+      // Check if it's a detail page URL
+      if (url.origin === base.origin && 
+          /\/(portfolio|investments?|companies?)\/[^\/\s#?]+\/?$/i.test(path) &&
+          text.length > 2 && text.length < 100) {
+        detailUrls.add(absoluteUrl.split('#')[0].split('?')[0]);
+      }
+    } catch (e) {
+      // Invalid URL, skip
+    }
+  }
+  
+  // Pattern 2: HTML links from HTML content if available
+  if (html) {
+    const htmlLinkPattern = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
+    
+    while ((match = htmlLinkPattern.exec(html)) !== null) {
+      const href = match[1];
+      const text = match[2].trim();
+      
+      try {
+        let absoluteUrl: string;
+        if (href.startsWith('http')) {
+          absoluteUrl = href;
+        } else if (href.startsWith('/')) {
+          absoluteUrl = `${base.origin}${href}`;
+        } else {
+          continue;
+        }
+        
+        const url = new URL(absoluteUrl);
+        const path = url.pathname.toLowerCase();
+        
+        if (url.origin === base.origin && 
+            /\/(portfolio|investments?|companies?)\/[^\/\s#?]+\/?$/i.test(path) &&
+            text.length > 2 && text.length < 100) {
+          detailUrls.add(absoluteUrl.split('#')[0].split('?')[0]);
+        }
+      } catch (e) {
+        // Invalid URL, skip
+      }
+    }
+  }
+  
+  const result = Array.from(detailUrls);
+  console.log(`Extracted ${result.length} detail page links from listing`);
+  return result;
+}
+
+/**
+ * Main extraction orchestrator - tries HTML → Text → Image-Grid
  */
 export function extractInvestmentData(page: CrawlData): Investment[] {
   try {
@@ -695,7 +807,21 @@ export function extractInvestmentData(page: CrawlData): Investment[] {
     }
 
     console.log(`No structured HTML found on ${page.metadata?.url || 'unknown'}, using text extraction`);
-    return extractInvestmentDataFromText(page);
+    const textInvestments = extractInvestmentDataFromText(page);
+    if (textInvestments.length > 0) {
+      return textInvestments;
+    }
+    
+    // Try image-grid extraction as last resort
+    console.log(`No text patterns found, trying image-grid extraction`);
+    const markdown = page.markdown || "";
+    const imageGridInvestments = extractFromImageGrid(markdown, page.metadata?.url || "");
+    if (imageGridInvestments.length > 0) {
+      console.log(`Extracted ${imageGridInvestments.length} investments from image-grid format`);
+      return imageGridInvestments;
+    }
+    
+    return [];
   } catch (error) {
     console.error(`Critical error in extractInvestmentData for ${page.metadata?.url || 'unknown'}:`, error);
     return [];
