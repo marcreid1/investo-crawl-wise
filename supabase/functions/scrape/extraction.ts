@@ -710,18 +710,31 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
 
         const nameIndex = text.indexOf(investmentName);
         if (nameIndex >= 0) {
-          const contextStart = Math.max(0, nameIndex - 100);
-          const contextEnd = Math.min(text.length, nameIndex + 500);
+          // Increased context window for better detail extraction
+          const contextStart = Math.max(0, nameIndex - 200);
+          const contextEnd = Math.min(text.length, nameIndex + 1000);
           const context = text.substring(contextStart, contextEnd);
           
-          const industryMatch = context.match(/(?:Industry|Sector|Category)[\s:]+([A-Za-z\s&,\/.-]{3,40})/i);
+          // More robust pattern matching for details
+          const industryMatch = context.match(/(?:Industry|Sector|Category|Vertical|Business|Focus)[\s:]+([A-Za-z\s&,\/.-]{3,60})/i);
           if (industryMatch && industryMatch[1]) {
             investment.industry = industryMatch[1].trim();
           }
           
-          const dateMatch = context.match(/(?:Date|Year|Since|In)[\s:]+([A-Za-z]+\s+\d{4}|\d{4})/i);
-          if (dateMatch && dateMatch[1]) {
-            investment.date = dateMatch[1].trim();
+          const locationMatch = context.match(/(?:Location|Headquarters|HQ|Based|City)[\s:]+([A-Za-z\s,\/.-]{3,60})/i);
+          if (locationMatch && locationMatch[1]) {
+            investment.location = locationMatch[1].trim();
+          }
+          
+          const yearMatch = context.match(/(?:Year|Since|Invested|Acquired|Founded)[\s:]+(\d{4})/i);
+          if (yearMatch && yearMatch[1]) {
+            investment.year = yearMatch[1].trim();
+            investment.date = yearMatch[1].trim();
+          }
+          
+          const ceoMatch = context.match(/(?:CEO|President|Chief Executive|Leader)[\s:]+([A-Z][A-Za-z\s\-'\.]{3,50})/i);
+          if (ceoMatch && ceoMatch[1]) {
+            investment.ceo = ceoMatch[1].trim();
           }
           
           const descMatch = context.match(/([A-Z][^\.!?]{50,300}[\.!?])/);
@@ -870,8 +883,38 @@ export function extractDetailLinksFromMarkdown(markdown: string, html: string, b
     }
   }
   
+  // Pattern 3: HTML company cards with links (more aggressive extraction)
+  if (html) {
+    const companyCardPattern = /<(?:div|li|tr)[^>]*class="[^"]*(?:company|portfolio|investment)[^"]*"[^>]*>([\s\S]{0,500}?)<\/(?:div|li|tr)>/gi;
+    let cardMatch;
+    
+    while ((cardMatch = companyCardPattern.exec(html)) !== null) {
+      const cardHtml = cardMatch[1];
+      const linkMatch = cardHtml.match(/<a[^>]+href="([^"]+)"/i);
+      
+      if (linkMatch && linkMatch[1]) {
+        try {
+          let absoluteUrl = linkMatch[1].startsWith('http') 
+            ? linkMatch[1] 
+            : linkMatch[1].startsWith('/') 
+              ? `${base.origin}${linkMatch[1]}`
+              : null;
+              
+          if (absoluteUrl) {
+            const url = new URL(absoluteUrl);
+            if (url.origin === base.origin && isDetailPage(absoluteUrl)) {
+              detailUrls.add(absoluteUrl.split('#')[0].split('?')[0]);
+            }
+          }
+        } catch (e) {
+          // Skip invalid URLs
+        }
+      }
+    }
+  }
+  
   const result = Array.from(detailUrls);
-  console.log(`Extracted ${result.length} detail page links from listing`);
+  console.log(`Extracted ${result.length} detail page links from listing (markdown + HTML cards)`);
   return result;
 }
 

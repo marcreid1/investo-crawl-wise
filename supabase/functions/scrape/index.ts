@@ -428,7 +428,18 @@ Deno.serve(async (req) => {
                   
                   // Import the extraction function
                   const { extractDetailLinksFromMarkdown } = await import("./extraction.ts");
-                  const detailPageUrls = extractDetailLinksFromMarkdown(fallbackMarkdown || "", fallbackHtml, pageUrl);
+                  let detailPageUrls = extractDetailLinksFromMarkdown(fallbackMarkdown || "", fallbackHtml, pageUrl);
+                  
+                  // If no detail pages found from markdown, try HTML harvest as fallback
+                  if (detailPageUrls.length === 0 && fallbackHtml) {
+                    console.log(`[${rid}] No detail pages from markdown extraction - trying HTML harvest...`);
+                    const harvested = harvestDetailLinksFromHTML(fallbackHtml, pageUrl, 20);
+                    
+                    if (harvested.internal.length > 0) {
+                      console.log(`[${rid}] Found ${harvested.internal.length} detail pages via HTML harvest`);
+                      detailPageUrls = harvested.internal;
+                    }
+                  }
                   
                   if (detailPageUrls.length > 0) {
                     console.log(`[${rid}] Found ${detailPageUrls.length} detail page URLs - initiating second-pass crawl...`);
