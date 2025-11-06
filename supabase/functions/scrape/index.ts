@@ -103,32 +103,39 @@ Deno.serve(async (req) => {
     
     console.log(`[${rid}] 📊 Crawl strategy: ${JSON.stringify(crawlStrategy)}`);
 
-    // PHASE 2: Extraction (with /v1/scrape/batch)
-    console.log(`[${rid}] Step 2: Extracting data with Firecrawl batch endpoint...`);
+    // PHASE 2: Extraction (Markdown-First Strategy)
+    console.log(`[${rid}] Step 2: Extracting data with markdown-first strategy...`);
     const allInvestments: Investment[] = [];
     const validationResults: any[] = [];
     let successfulPages = 0;
     let failedPages = 0;
 
-    const shouldUseListingSchema = listingPages.length > 0 && detailPages.length === 0;
-    const pagesToProcess = shouldUseListingSchema ? listingPages : [...listingPages, ...detailPages];
+    // Split processing: batch+schema for listing pages, markdown for detail pages
+    const listingPagesToProcess = listingPages;
+    const detailPagesToProcess = detailPages;
     
-    console.log(`[${rid}] Processing ${pagesToProcess.length} pages (${listingPages.length} listing, ${detailPages.length} detail)`);
+    // Credit estimation
+    const estimatedListingCredits = listingPagesToProcess.length * 5; // ~5 credits per listing with schema
+    const estimatedDetailCredits = detailPagesToProcess.length * 1; // ~1 credit per detail with markdown
+    const totalEstimatedCredits = estimatedListingCredits + estimatedDetailCredits;
+    console.log(`[${rid}] 💰 Estimated credits: ${totalEstimatedCredits} (${estimatedListingCredits} listing + ${estimatedDetailCredits} detail)`);
+    
+    console.log(`[${rid}] Processing ${listingPagesToProcess.length} listing pages with batch+schema and ${detailPagesToProcess.length} detail pages with markdown`);
 
-    // BATCHING: Use Firecrawl's /v1/scrape/batch endpoint
-    const BATCH_SIZE = 10; // Firecrawl can handle up to 10 URLs per batch request
-    const batches: string[][] = [];
-    for (let i = 0; i < pagesToProcess.length; i += BATCH_SIZE) {
-      batches.push(pagesToProcess.slice(i, i + BATCH_SIZE));
-    }
+    // PART 1: Process listing pages with batch+schema (if any)
+    if (listingPagesToProcess.length > 0) {
+      console.log(`[${rid}] Processing ${listingPagesToProcess.length} listing pages with batch+schema...`);
+      const BATCH_SIZE = 10;
+      const listingBatches: string[][] = [];
+      for (let i = 0; i < listingPagesToProcess.length; i += BATCH_SIZE) {
+        listingBatches.push(listingPagesToProcess.slice(i, i + BATCH_SIZE));
+      }
+      crawlStrategy.batchedRequests = listingBatches.length;
     
-    console.log(`[${rid}] Using /v1/scrape/batch: ${batches.length} batch requests for ${pagesToProcess.length} pages`);
-    crawlStrategy.batchedRequests = batches.length;
-    
-    // Process batches in parallel with Promise.allSettled
-    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-      const batch = batches[batchIdx];
-      console.log(`[${rid}] Processing batch ${batchIdx + 1}/${batches.length} (${batch.length} URLs)...`);
+    // Process listing page batches
+    for (let batchIdx = 0; batchIdx < listingBatches.length; batchIdx++) {
+      const batch = listingBatches[batchIdx];
+      console.log(`[${rid}] Processing batch ${batchIdx + 1}/${listingBatches.length} (${batch.length} URLs)...`);
       
       try {
         // Check cache for each URL in batch
@@ -136,13 +143,12 @@ Deno.serve(async (req) => {
         const uncachedUrls: string[] = [];
         
         for (const pageUrl of batch) {
-          const isListingPage = listingPages.includes(pageUrl);
-          const scrapeCacheType = isListingPage ? 'scrape-listing' : 'scrape-detail';
+          const scrapeCacheType = 'scrape-listing';
           
           const cached = await getCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType);
           if (cached) {
             cacheStats.hits++;
-            cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData: cached });
+            cachedResults.set(pageUrl, { pageUrl, isListingPage: true, scrapeData: cached });
           } else {
             cacheStats.misses++;
             uncachedUrls.push(pageUrl);
@@ -151,51 +157,10 @@ Deno.serve(async (req) => {
         
         console.log(`[${rid}] Batch cache: ${cachedResults.size} hits, ${uncachedUrls.length} misses`);
         
-        // Fetch uncached URLs using /v1/batch/scrape (unless forced fallback mode)
-        if (uncachedUrls.length > 0) {
-          crawlStrategy.individualRequests += uncachedUrls.length;
-          
-          // Skip batch mode if preflight or domain health suggests fallback
-          if (forceFallbackMode) {
-            console.log(`[${rid}] ⚠️ Skipping batch mode, using individual scrapes for ${uncachedUrls.length} URLs...`);
-            
-            for (const pageUrl of uncachedUrls) {
-              try {
-                const individualResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
-                  method: "POST",
-                  headers: { 
-                    Authorization: `Bearer ${apiKey}`, 
-                    "Content-Type": "application/json" 
-                  },
-                  body: JSON.stringify({
-                    url: pageUrl,
-                    formats: ["markdown", "html"],
-                    onlyMainContent: true,
-                    waitFor: 2000,
-                    timeout: 25000,
-                  }),
-                });
-                
-                if (individualResponse.ok) {
-                  const scrapeData = await individualResponse.json();
-                  const isListingPage = listingPages.includes(pageUrl);
-                  const scrapeCacheType = 'scrape-markdown';
-                  
-                  await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
-                  cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData });
-                  console.log(`[${rid}] ✅ Individual scrape success: ${pageUrl}`);
-                } else {
-                  console.error(`[${rid}] ❌ Individual scrape failed for ${pageUrl}: ${individualResponse.status}`);
-                  failedPages++;
-                }
-              } catch (error) {
-                console.error(`[${rid}] ❌ Individual scrape error for ${pageUrl}:`, error);
-                failedPages++;
-              }
-            }
-          } else {
-            // Use batch mode
-            const batchResponse = await fetch("https://api.firecrawl.dev/v1/batch/scrape", {
+        // Fetch uncached listing URLs using /v1/batch/scrape
+        if (uncachedUrls.length > 0 && !forceFallbackMode) {
+          console.log(`[${rid}] Fetching ${uncachedUrls.length} listing pages with batch+schema...`);
+          const batchResponse = await fetch("https://api.firecrawl.dev/v1/batch/scrape", {
             method: "POST",
             headers: { 
               Authorization: `Bearer ${apiKey}`, 
@@ -204,7 +169,7 @@ Deno.serve(async (req) => {
             body: JSON.stringify({
               urls: uncachedUrls,
               extract: { 
-                schema: shouldUseListingSchema ? listingExtractionSchema : singleExtractionSchema 
+                schema: listingExtractionSchema 
               },
               formats: ["extract", "markdown", "html"],
               onlyMainContent: true,
@@ -217,33 +182,13 @@ Deno.serve(async (req) => {
             const batchData = await batchResponse.json();
             const results = batchData.data || [];
             
-            // Record success for domain health tracking
-            domainHealthTracker.recordSuccess(url);
-            
-            for (let i = 0; i < uncachedUrls.length; i++) {
-              const pageUrl = uncachedUrls[i];
-              const scrapeData = results[i];
-              const isListingPage = listingPages.includes(pageUrl);
-              const scrapeCacheType = isListingPage ? 'scrape-listing' : 'scrape-detail';
+            // Batch failure detection: Check if batch succeeded but returned no data
+            const extractedCount = results.filter((r: any) => r?.data?.extract || r?.extract).length;
+            if (extractedCount === 0 && results.length > 0) {
+              console.log(`[${rid}] ⚠️ Batch returned empty extractions (0/${results.length}), falling back to markdown scrapes...`);
+              domainHealthTracker.recordFailure(url, 'other');
               
-              if (scrapeData) {
-                // Cache individual result
-                await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
-                cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData });
-              }
-            }
-          } else {
-            const statusCode = batchResponse.status;
-            console.error(`[${rid}] Batch request failed: ${statusCode}`);
-            
-            // Record failure for domain health tracking
-            const failureType = statusCode === 503 ? '503' : statusCode === 429 ? '429' : 'other';
-            domainHealthTracker.recordFailure(url, failureType);
-            
-            // Fallback to individual scrapes if batch fails or if forced fallback mode
-            if (forceFallbackMode || !batchResponse.ok) {
-              console.log(`[${rid}] 🔄 Falling back to individual scrapes for ${uncachedUrls.length} URLs...`);
-              
+              // Fall back to markdown scrapes
               for (const pageUrl of uncachedUrls) {
                 try {
                   const individualResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
@@ -263,25 +208,67 @@ Deno.serve(async (req) => {
                   
                   if (individualResponse.ok) {
                     const scrapeData = await individualResponse.json();
-                    const isListingPage = listingPages.includes(pageUrl);
-                    const scrapeCacheType = 'scrape-markdown';
-                    
-                    await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
-                    cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData });
-                    console.log(`[${rid}] ✅ Individual scrape success: ${pageUrl}`);
-                  } else {
-                    console.error(`[${rid}] ❌ Individual scrape failed for ${pageUrl}: ${individualResponse.status}`);
-                    failedPages++;
+                    await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown', scrapeData);
+                    cachedResults.set(pageUrl, { pageUrl, isListingPage: true, scrapeData });
+                    console.log(`[${rid}] ✅ Markdown fallback success: ${pageUrl}`);
                   }
                 } catch (error) {
-                  console.error(`[${rid}] ❌ Individual scrape error for ${pageUrl}:`, error);
+                  console.error(`[${rid}] ❌ Markdown fallback error for ${pageUrl}:`, error);
                   failedPages++;
                 }
               }
             } else {
-              failedPages += uncachedUrls.length;
+              // Batch extraction succeeded
+              console.log(`[${rid}] ✅ Batch extracted ${extractedCount}/${results.length} listings successfully`);
+              domainHealthTracker.recordSuccess(url);
+              
+              for (let i = 0; i < uncachedUrls.length; i++) {
+                const pageUrl = uncachedUrls[i];
+                const scrapeData = results[i];
+                
+                if (scrapeData) {
+                  await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-listing', scrapeData);
+                  cachedResults.set(pageUrl, { pageUrl, isListingPage: true, scrapeData });
+                }
+              }
             }
+          } else {
+            const statusCode = batchResponse.status;
+            console.error(`[${rid}] Batch request failed: ${statusCode}`);
+            domainHealthTracker.recordFailure(url, statusCode === 503 ? '503' : statusCode === 429 ? '429' : 'other');
+            failedPages += uncachedUrls.length;
           }
+        } else if (forceFallbackMode && uncachedUrls.length > 0) {
+          // Fallback mode: use markdown scrapes for listing pages
+          console.log(`[${rid}] Using markdown fallback for ${uncachedUrls.length} listing pages...`);
+          for (const pageUrl of uncachedUrls) {
+            try {
+              const individualResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+                method: "POST",
+                headers: { 
+                  Authorization: `Bearer ${apiKey}`, 
+                  "Content-Type": "application/json" 
+                },
+                body: JSON.stringify({
+                  url: pageUrl,
+                  formats: ["markdown", "html"],
+                  onlyMainContent: true,
+                  waitFor: 2000,
+                  timeout: 25000,
+                }),
+              });
+              
+              if (individualResponse.ok) {
+                const scrapeData = await individualResponse.json();
+                await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown', scrapeData);
+                cachedResults.set(pageUrl, { pageUrl, isListingPage: true, scrapeData });
+              } else {
+                failedPages++;
+              }
+            } catch (error) {
+              console.error(`[${rid}] ❌ Markdown fallback error:`, error);
+              failedPages++;
+            }
           }
         }
         
@@ -380,7 +367,83 @@ Deno.serve(async (req) => {
         failedPages += batch.length;
       }
       
-      console.log(`[${rid}] Batch ${batchIdx + 1} complete: ${successfulPages} successful, ${failedPages} failed so far`);
+      console.log(`[${rid}] Listing batch ${batchIdx + 1}/${listingBatches.length} complete`);
+    }
+    }
+    
+    // PART 2: Process detail pages with markdown-only (cost-efficient)
+    if (detailPagesToProcess.length > 0) {
+      console.log(`[${rid}] Processing ${detailPagesToProcess.length} detail pages with markdown-only strategy...`);
+      crawlStrategy.individualRequests = detailPagesToProcess.length;
+      
+      // Process detail pages individually with markdown
+      for (const pageUrl of detailPagesToProcess) {
+        try {
+          // Check cache first
+          const cached = await getCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown');
+          let scrapeData;
+          
+          if (cached) {
+            cacheStats.hits++;
+            scrapeData = cached;
+            console.log(`[${rid}] ✓ Cache HIT for detail: ${pageUrl}`);
+          } else {
+            cacheStats.misses++;
+            console.log(`[${rid}] ✗ Cache MISS for detail: ${pageUrl}`);
+            
+            // Fetch with markdown-only
+            const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+              method: "POST",
+              headers: { 
+                Authorization: `Bearer ${apiKey}`, 
+                "Content-Type": "application/json" 
+              },
+              body: JSON.stringify({
+                url: pageUrl,
+                formats: ["markdown", "html"],
+                onlyMainContent: true,
+                waitFor: 2000,
+                timeout: 25000,
+              }),
+            });
+            
+            if (response.ok) {
+              scrapeData = await response.json();
+              await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown', scrapeData);
+            } else {
+              console.error(`[${rid}] ❌ Failed to scrape detail page: ${pageUrl}`);
+              failedPages++;
+              continue;
+            }
+          }
+          
+          // Extract from markdown
+          const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
+          const html = scrapeData?.data?.html || scrapeData?.html;
+          
+          if (markdown || html) {
+            const pageData = { markdown: markdown || "", html: html || "", metadata: { url: pageUrl } };
+            const investments = extractInvestmentData(pageData);
+            
+            investments.forEach(inv => {
+              const enhanced = applyFallbackExtraction(inv, markdown);
+              const validation = validateInvestment(enhanced);
+              allInvestments.push(enhanced);
+              validationResults.push({ ...validation, name: enhanced.name });
+            });
+            
+            successfulPages++;
+          } else {
+            failedPages++;
+          }
+          
+        } catch (error) {
+          console.error(`[${rid}] ❌ Error processing detail page ${pageUrl}:`, error);
+          failedPages++;
+        }
+      }
+      
+      console.log(`[${rid}] Detail pages complete: ${successfulPages} successful, ${failedPages} failed`);
     }
 
     // PHASE 3: Processing
