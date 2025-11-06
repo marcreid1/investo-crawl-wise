@@ -52,6 +52,19 @@ export function cleanInvestmentName(name: string): string {
 }
 
 /**
+ * Converts text to title case (capitalizes first letter of each word)
+ */
+export function toTitleCase(text: string): string {
+  if (!text) return "";
+  
+  return text
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
  * Normalizes industry strings, handling concatenated values
  */
 export function normalizeIndustry(industry: string | undefined): string | undefined {
@@ -60,10 +73,10 @@ export function normalizeIndustry(industry: string | undefined): string | undefi
   const commaCount = (industry.match(/,/g) || []).length;
   if (industry.length > 120 || commaCount > 4) {
     const firstSegment = industry.split(',')[0].trim();
-    return firstSegment.length > 3 ? firstSegment : undefined;
+    return firstSegment.length > 3 ? toTitleCase(firstSegment) : undefined;
   }
   
-  return industry;
+  return toTitleCase(industry);
 }
 
 /**
