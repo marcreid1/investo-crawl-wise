@@ -133,7 +133,7 @@ Deno.serve(async (req) => {
         if (uncachedUrls.length > 0) {
           crawlStrategy.individualRequests += uncachedUrls.length;
           
-          const batchResponse = await fetch("https://api.firecrawl.dev/v1/scrape/batch", {
+          const batchResponse = await fetch("https://api.firecrawl.dev/v1/batch/scrape", {
             method: "POST",
             headers: { 
               Authorization: `Bearer ${apiKey}`, 
