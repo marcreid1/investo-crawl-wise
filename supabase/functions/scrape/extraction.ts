@@ -285,6 +285,44 @@ export function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
                 }
               }
 
+              // If no name found, try extracting from <a> tags
+              if (!investment.name) {
+                const linkPattern = /<a[^>]*>([^<]+)<\/a>/i;
+                const linkMatch = rowHtml.match(linkPattern);
+                if (linkMatch && linkMatch[1]?.trim()) {
+                  investment.name = linkMatch[1].trim();
+                }
+              }
+
+              // If still no name, try image alt text
+              if (!investment.name) {
+                const altPattern = /<img[^>]*alt="([^"]+)"[^>]*>/i;
+                const altMatch = rowHtml.match(altPattern);
+                if (altMatch && altMatch[1]) {
+                  investment.name = altMatch[1].replace(/\s*(logo|company|brand)\s*/gi, '').trim();
+                }
+              }
+
+              // Extract the URL for this company from the card
+              const urlPattern = /<a[^>]*href="([^"]+)"[^>]*>/i;
+              const urlMatch = rowHtml.match(urlPattern);
+              if (urlMatch && urlMatch[1]) {
+                try {
+                  const companyUrl = new URL(urlMatch[1], pageUrl).href;
+                  investment.portfolioUrl = companyUrl;
+                  
+                  // If we still don't have a name, derive it from the URL slug
+                  if (!investment.name) {
+                    const slug = companyUrl.split('/').filter(p => p).pop() || '';
+                    investment.name = slug.split('-').map(w => 
+                      w.charAt(0).toUpperCase() + w.slice(1)
+                    ).join(' ');
+                  }
+                } catch (urlError) {
+                  // Invalid URL, skip
+                }
+              }
+
               for (const industrySelector of selectors.industry) {
                 try {
                   const escapedIndustry = industrySelector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\./g, '.');

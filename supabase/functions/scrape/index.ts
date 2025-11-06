@@ -386,19 +386,64 @@ Deno.serve(async (req) => {
                           const detailInvestments = extractInvestmentData(detailPageData);
                           
                           if (detailInvestments.length > 0) {
-                            // Merge detail data into original investments
+                            // Helper function to normalize names for matching
+                            const normalizeForMatching = (name: string): string => {
+                              return name
+                                .toLowerCase()
+                                .replace(/\b(inc|llc|ltd|corp|corporation|company|co)\b\.?/gi, '')
+                                .replace(/[^\w\s]/g, '')
+                                .trim();
+                            };
+
                             const detailInv = detailInvestments[0];
-                            const matchingInv = fallbackInvestments.find(inv => 
-                              inv.name.toLowerCase().includes(detailInv.name.toLowerCase()) ||
-                              detailInv.name.toLowerCase().includes(inv.name.toLowerCase())
-                            );
-                            
+                            let matchingInv = null;
+
+                            // 1. Try URL matching (most reliable)
+                            if (detailUrl) {
+                              const detailSlug = detailUrl.split('/').filter(p => p).pop() || '';
+                              matchingInv = fallbackInvestments.find(inv => 
+                                inv.portfolioUrl && inv.portfolioUrl.includes(detailSlug)
+                              );
+                              if (matchingInv) {
+                                console.log(`[${rid}] ✓ Matched via URL: ${matchingInv.name} -> ${detailUrl}`);
+                              }
+                            }
+
+                            // 2. Try exact normalized name match
+                            if (!matchingInv) {
+                              const normalizedDetailName = normalizeForMatching(detailInv.name);
+                              matchingInv = fallbackInvestments.find(inv => 
+                                normalizeForMatching(inv.name) === normalizedDetailName
+                              );
+                              if (matchingInv) {
+                                console.log(`[${rid}] ✓ Matched via exact name: ${matchingInv.name} <-> ${detailInv.name}`);
+                              }
+                            }
+
+                            // 3. Try partial match (only if names are substantial)
+                            if (!matchingInv && detailInv.name.length > 3) {
+                              const normalizedDetailName = normalizeForMatching(detailInv.name);
+                              matchingInv = fallbackInvestments.find(inv => {
+                                const normalizedInvName = normalizeForMatching(inv.name);
+                                return normalizedInvName.length > 3 && (
+                                  normalizedInvName.includes(normalizedDetailName) ||
+                                  normalizedDetailName.includes(normalizedInvName)
+                                );
+                              });
+                              if (matchingInv) {
+                                console.log(`[${rid}] ✓ Matched via partial name: ${matchingInv.name} <-> ${detailInv.name}`);
+                              }
+                            }
+
                             if (matchingInv) {
                               Object.assign(matchingInv, {
                                 ...detailInv,
-                                name: matchingInv.name, // Keep original name
+                                name: matchingInv.name, // Keep original name from listing
+                                portfolioUrl: matchingInv.portfolioUrl || detailInv.portfolioUrl,
                               });
-                              console.log(`[${rid}] ✓ Enriched ${matchingInv.name} with detail page data`);
+                              console.log(`[${rid}] ✓ Enriched ${matchingInv.name} with detail page data (industry: ${detailInv.industry}, year: ${detailInv.year})`);
+                            } else {
+                              console.warn(`[${rid}] ⚠️ No match found for detail page ${detailUrl} (extracted: ${detailInv.name})`);
                             }
                           }
                         }
