@@ -53,6 +53,16 @@ export interface CacheStats {
   misses: number;
 }
 
+export interface CrawlStrategy {
+  userDepth: number;
+  finalDepth: number;
+  pagesRequested: number;
+  pagesCrawled: number;
+  batchedRequests: number;
+  individualRequests: number;
+  adaptiveReason?: string;
+}
+
 export interface ValidationResult {
   valid: boolean;
   confidence: number;

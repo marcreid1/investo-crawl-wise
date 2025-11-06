@@ -86,7 +86,95 @@ export function isDetailPage(url: string): boolean {
 }
 
 /**
+ * Quick initial scan to count investment links on root page for adaptive depth
+ */
+async function quickScanRootPage(
+  url: string,
+  apiKey: string,
+  supabaseUrl: string,
+  supabaseKey: string,
+  cacheStats: CacheStats
+): Promise<number> {
+  console.log(`Quick scan of root page: ${url}`);
+  
+  let scrapeData = await getCachedResponse(supabaseUrl, supabaseKey, url, 'scrape-markdown');
+  
+  if (scrapeData) {
+    cacheStats.hits++;
+  } else {
+    cacheStats.misses++;
+    
+    const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url,
+        formats: ["html"],
+        onlyMainContent: true,
+        waitFor: 1000,
+        timeout: 15000,
+      }),
+    });
+    
+    if (response.ok) {
+      scrapeData = await response.json();
+      await saveCachedResponse(supabaseUrl, supabaseKey, url, 'scrape-markdown', scrapeData);
+    }
+  }
+  
+  const html = scrapeData?.data?.html || scrapeData?.html || "";
+  if (!html) return 0;
+  
+  // Count investment-related links
+  const linkPattern = /<a[^>]*href="([^"]*)"[^>]*>/gi;
+  const matches = [...html.matchAll(linkPattern)];
+  const investmentLinks = matches.filter(match => {
+    const href = match[1].toLowerCase();
+    return href.includes('portfolio') || href.includes('investment') || href.includes('company');
+  });
+  
+  console.log(`Quick scan found ${investmentLinks.length} investment-related links`);
+  return investmentLinks.length;
+}
+
+/**
+ * Determines optimal crawl depth based on initial link density
+ */
+function calculateAdaptiveDepth(
+  userDepth: number,
+  linkCount: number
+): { finalDepth: number; reason: string } {
+  // High link density (≥10 links) → reduce depth to save credits
+  if (linkCount >= 10) {
+    const finalDepth = Math.min(userDepth, 2);
+    return {
+      finalDepth,
+      reason: `High link density (${linkCount} links) - reduced depth to ${finalDepth} to optimize crawl`
+    };
+  }
+  
+  // Low link density (<3 links) → increase depth to find more
+  if (linkCount < 3) {
+    const finalDepth = Math.min(userDepth + 2, 5);
+    return {
+      finalDepth,
+      reason: `Low link density (${linkCount} links) - increased depth to ${finalDepth} to discover more pages`
+    };
+  }
+  
+  // Medium density → use user preference
+  return {
+    finalDepth: userDepth,
+    reason: `Normal link density (${linkCount} links) - using user depth ${userDepth}`
+  };
+}
+
+/**
  * Initiates a Firecrawl crawl and polls until completion or timeout
+ * Now with adaptive depth adjustment based on initial discovery
  */
 export async function discoverInvestmentPages(
   url: string,
@@ -104,11 +192,21 @@ export async function discoverInvestmentPages(
   listingPages: string[];
   detailPages: string[];
   isPartial: boolean;
+  adaptiveDepth: number;
+  adaptiveReason: string;
 }> {
   console.log(`[${rid}] Step 1: Discovering investment pages...`);
   console.log(`JS-friendly options: onlyMainContent=true, waitFor=2000ms, timeout=25000ms`);
   
-  const crawlCacheKey = `${url}_depth${crawlDepthValue}_max${maxPagesValue}`;
+  // ADAPTIVE DEPTH: Quick scan root page to determine optimal depth
+  console.log(`[${rid}] Adaptive crawl: scanning root page for link density...`);
+  const rootLinkCount = await quickScanRootPage(url, apiKey, supabaseUrl, supabaseKey, cacheStats);
+  const { finalDepth, reason } = calculateAdaptiveDepth(crawlDepthValue, rootLinkCount);
+  
+  console.log(`[${rid}] 📊 Adaptive depth decision: ${reason}`);
+  console.log(`[${rid}] User requested depth: ${crawlDepthValue}, Final depth: ${finalDepth}`);
+  
+  const crawlCacheKey = `${url}_depth${finalDepth}_max${maxPagesValue}`;
   let cachedCrawlData = await getCachedResponse(supabaseUrl, supabaseKey, crawlCacheKey, 'crawl');
   
   let crawlInitData: any;
@@ -122,17 +220,17 @@ export async function discoverInvestmentPages(
   } else {
     cacheStats.misses++;
     
-    const crawlRequestBody: any = {
-      url: url,
-      limit: maxPagesValue,
-      maxDepth: crawlDepthValue,
-      scrapeOptions: {
-        formats: ["markdown", "html"],
-        onlyMainContent: true,
-        waitFor: 2000,
-        timeout: 25000,
-      },
-    };
+      const crawlRequestBody: any = {
+        url: url,
+        limit: maxPagesValue,
+        maxDepth: finalDepth, // Use adaptive depth
+        scrapeOptions: {
+          formats: ["markdown", "html"],
+          onlyMainContent: true,
+          waitFor: 2000,
+          timeout: 25000,
+        },
+      };
 
     console.log("Sending crawl request to Firecrawl API");
     const crawlInitResponse = await fetch(
@@ -167,7 +265,9 @@ export async function discoverInvestmentPages(
         discoveredUrls: [],
         listingPages: [],
         detailPages: [],
-        isPartial: false
+        isPartial: false,
+        adaptiveDepth: finalDepth,
+        adaptiveReason: reason
       };
     }
 
@@ -181,7 +281,9 @@ export async function discoverInvestmentPages(
         discoveredUrls: [],
         listingPages: [],
         detailPages: [],
-        isPartial: false
+        isPartial: false,
+        adaptiveDepth: finalDepth,
+        adaptiveReason: reason
       };
     }
     
@@ -303,7 +405,9 @@ export async function discoverInvestmentPages(
           discoveredUrls: [],
           listingPages: [],
           detailPages: [],
-          isPartial: false
+          isPartial: false,
+          adaptiveDepth: finalDepth,
+          adaptiveReason: reason
         };
       }
     } catch (jsonError) {
@@ -325,7 +429,9 @@ export async function discoverInvestmentPages(
       discoveredUrls: [],
       listingPages: [],
       detailPages: [],
-      isPartial
+      isPartial,
+      adaptiveDepth: finalDepth,
+      adaptiveReason: reason
     };
   }
 
@@ -334,6 +440,8 @@ export async function discoverInvestmentPages(
     discoveredUrls,
     listingPages,
     detailPages,
-    isPartial
+    isPartial,
+    adaptiveDepth: finalDepth,
+    adaptiveReason: reason
   };
 }
