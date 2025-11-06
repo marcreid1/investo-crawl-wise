@@ -10,54 +10,12 @@ import { validateInvestment, applyFallbackExtraction } from "./fallbacks.ts";
 import { deduplicateInvestments } from "./processing.ts";
 import { saveScrapingHistory } from "./storage.ts";
 import { cleanInvestment } from "./utils.ts";
-import { getCachedResponse, saveCachedResponse } from "./cache.ts";
+import { getCachedResponse, saveCachedResponse, getOrFetchSnapshot } from "./cache.ts";
+import { singleExtractionSchema, listingExtractionSchema, normalizeExtractedData } from "./schemas.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-// Firecrawl extraction schemas
-const singleExtractionSchema = {
-  type: "object",
-  properties: {
-    company_name: { type: "string", description: "The portfolio company name for THIS SPECIFIC PAGE ONLY." },
-    industry: { type: "string", description: "Industry for THIS SPECIFIC COMPANY ONLY." },
-    ceo: { type: "string", description: "CEO or company leader name." },
-    investment_role: { type: "string", description: "The private equity firm's role in this investment." },
-    ownership: { type: "string", description: "Ownership stake or control level." },
-    year_of_initial_investment: { type: "string", description: "Year of first investment." },
-    location: { type: "string", description: "Company headquarters location." },
-    website: { type: "string", description: "Company website URL." },
-    status: { type: "string", description: "Investment status." }
-  },
-  required: ["company_name"]
-};
-
-const listingExtractionSchema = {
-  type: "object",
-  properties: {
-    investments: {
-      type: "array",
-      description: "Array of ALL portfolio companies visible on this page.",
-      items: {
-        type: "object",
-        properties: {
-          company_name: { type: "string", description: "Portfolio company name for THIS SPECIFIC COMPANY ONLY." },
-          industry: { type: "string", description: "Industry for THIS SPECIFIC COMPANY ONLY." },
-          ceo: { type: "string", description: "CEO or leader for THIS SPECIFIC COMPANY ONLY." },
-          investment_role: { type: "string", description: "Investment role for THIS SPECIFIC COMPANY." },
-          ownership: { type: "string", description: "Ownership for THIS SPECIFIC COMPANY." },
-          year_of_initial_investment: { type: "string", description: "Year of investment for THIS SPECIFIC COMPANY." },
-          location: { type: "string", description: "Headquarters location for THIS SPECIFIC COMPANY." },
-          website: { type: "string", description: "Website URL for THIS SPECIFIC COMPANY." },
-          status: { type: "string", description: "Status for THIS SPECIFIC COMPANY." }
-        },
-        required: ["company_name"]
-      }
-    }
-  },
-  required: ["investments"]
 };
 
 Deno.serve(async (req) => {
@@ -123,8 +81,8 @@ Deno.serve(async (req) => {
     
     console.log(`[${rid}] 📊 Crawl strategy: ${JSON.stringify(crawlStrategy)}`);
 
-    // PHASE 2: Extraction (with batching)
-    console.log(`[${rid}] Step 2: Extracting data with batched parallel processing...`);
+    // PHASE 2: Extraction (with /v1/scrape/batch)
+    console.log(`[${rid}] Step 2: Extracting data with Firecrawl batch endpoint...`);
     const allInvestments: Investment[] = [];
     const validationResults: any[] = [];
     let successfulPages = 0;
@@ -135,67 +93,96 @@ Deno.serve(async (req) => {
     
     console.log(`[${rid}] Processing ${pagesToProcess.length} pages (${listingPages.length} listing, ${detailPages.length} detail)`);
 
-    // BATCHING: Process pages in parallel batches for efficiency
-    const BATCH_SIZE = 5; // Process 5 pages concurrently
+    // BATCHING: Use Firecrawl's /v1/scrape/batch endpoint
+    const BATCH_SIZE = 10; // Firecrawl can handle up to 10 URLs per batch request
     const batches: string[][] = [];
     for (let i = 0; i < pagesToProcess.length; i += BATCH_SIZE) {
       batches.push(pagesToProcess.slice(i, i + BATCH_SIZE));
     }
     
-    console.log(`[${rid}] Split into ${batches.length} batches of up to ${BATCH_SIZE} pages each`);
+    console.log(`[${rid}] Using /v1/scrape/batch: ${batches.length} batch requests for ${pagesToProcess.length} pages`);
     crawlStrategy.batchedRequests = batches.length;
-    // Process batches sequentially, pages within batch in parallel
+    
+    // Process batches in parallel with Promise.allSettled
     for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
       const batch = batches[batchIdx];
-      console.log(`[${rid}] Processing batch ${batchIdx + 1}/${batches.length} (${batch.length} pages)...`);
+      console.log(`[${rid}] Processing batch ${batchIdx + 1}/${batches.length} (${batch.length} URLs)...`);
       
-      // Process all pages in this batch concurrently with Promise.allSettled
-      const batchPromises = batch.map(async (pageUrl) => {
-        try {
+      try {
+        // Check cache for each URL in batch
+        const cachedResults: Map<string, any> = new Map();
+        const uncachedUrls: string[] = [];
+        
+        for (const pageUrl of batch) {
           const isListingPage = listingPages.includes(pageUrl);
-          const schemaToUse = isListingPage ? listingExtractionSchema : singleExtractionSchema;
           const scrapeCacheType = isListingPage ? 'scrape-listing' : 'scrape-detail';
           
-          crawlStrategy.individualRequests++;
-          
-          let scrapeData = await getCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType);
-          let scrapeResponseOk = true;
-          
-          if (scrapeData) {
+          const cached = await getCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType);
+          if (cached) {
             cacheStats.hits++;
+            cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData: cached });
           } else {
             cacheStats.misses++;
-            
-            const scrapeResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                url: pageUrl,
-                formats: ["extract", "markdown", "html"],
-                extract: { schema: schemaToUse },
-                onlyMainContent: true,
-                waitFor: 2000,
-                timeout: 25000,
-              }),
-            });
-
-            scrapeResponseOk = scrapeResponse.ok;
-            scrapeData = !scrapeResponse.ok ? null : await scrapeResponse.json();
-            
-            if (scrapeData && scrapeResponse.ok) {
-              await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
-            }
+            uncachedUrls.push(pageUrl);
           }
+        }
+        
+        console.log(`[${rid}] Batch cache: ${cachedResults.size} hits, ${uncachedUrls.length} misses`);
+        
+        // Fetch uncached URLs using /v1/scrape/batch
+        if (uncachedUrls.length > 0) {
+          crawlStrategy.individualRequests += uncachedUrls.length;
           
-          const extracted = scrapeData?.data?.extract || scrapeData?.extract;
-          const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
-          const html = scrapeData?.data?.html || scrapeData?.html;
-          
-          const needsFallback = !scrapeResponseOk || !scrapeData?.success || !extracted;
-          
-          const pageInvestments: Investment[] = [];
-          
-          if (needsFallback) {
+          const batchResponse = await fetch("https://api.firecrawl.dev/v1/scrape/batch", {
+            method: "POST",
+            headers: { 
+              Authorization: `Bearer ${apiKey}`, 
+              "Content-Type": "application/json" 
+            },
+            body: JSON.stringify({
+              urls: uncachedUrls,
+              extract: { 
+                schema: shouldUseListingSchema ? listingExtractionSchema : singleExtractionSchema 
+              },
+              formats: ["extract", "markdown", "html"],
+              onlyMainContent: true,
+              waitFor: 2000,
+              timeout: 25000,
+            }),
+          });
+
+          if (batchResponse.ok) {
+            const batchData = await batchResponse.json();
+            const results = batchData.data || [];
+            
+            for (let i = 0; i < uncachedUrls.length; i++) {
+              const pageUrl = uncachedUrls[i];
+              const scrapeData = results[i];
+              const isListingPage = listingPages.includes(pageUrl);
+              const scrapeCacheType = isListingPage ? 'scrape-listing' : 'scrape-detail';
+              
+              if (scrapeData) {
+                // Cache individual result
+                await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
+                cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData });
+              }
+            }
+          } else {
+            console.error(`[${rid}] Batch request failed: ${batchResponse.status}`);
+            failedPages += uncachedUrls.length;
+          }
+        }
+        
+        // Process all results (cached + freshly fetched)
+        for (const { pageUrl, isListingPage, scrapeData } of cachedResults.values()) {
+          try {
+            const extracted = scrapeData?.data?.extract || scrapeData?.extract;
+            const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
+            const html = scrapeData?.data?.html || scrapeData?.html;
+            
+            const pageInvestments: Investment[] = [];
+            
+            if (!extracted || !scrapeData?.success) {
             console.log(`[${rid}] Using fallback extraction for ${pageUrl}`);
             
             let fallbackMarkdown = markdown;
@@ -252,59 +239,34 @@ Deno.serve(async (req) => {
                 return { investment: enhanced, validation };
               });
             }
-          } else {
-            // AI extraction succeeded
-            const extractedInvestments = isListingPage ? (extracted.investments || []) : [extracted];
-            
-            extractedInvestments.forEach((item: any) => {
-              const investment: Investment = {
-                name: item.company_name || item.name || "",
-                industry: item.industry,
-                ceo: item.ceo,
-                investmentRole: item.investment_role,
-                ownership: item.ownership,
-                year: item.year_of_initial_investment,
-                location: item.location,
-                website: item.website,
-                status: item.status,
-                sourceUrl: pageUrl,
-                portfolioUrl: pageUrl,
-              };
+            } else {
+              // AI extraction succeeded - use new nested schema format
+              const normalized = normalizeExtractedData(extracted, pageUrl);
+              const extractedInvestments = Array.isArray(normalized) ? normalized : [normalized];
               
-              const enhanced = applyFallbackExtraction(investment, markdown);
-              const validation = validateInvestment(enhanced);
-              pageInvestments.push(enhanced);
-              return { investment: enhanced, validation };
-            });
-          }
-          
-          return { success: true, pageUrl, investments: pageInvestments };
-        } catch (pageError) {
-          console.error(`[${rid}] Error processing page ${pageUrl}:`, pageError);
-          return { success: false, pageUrl, error: String(pageError) };
-        }
-      });
-      
-      // Wait for all pages in batch to complete
-      const batchResults = await Promise.allSettled(batchPromises);
-      
-      // Process results
-      batchResults.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value.success) {
-          successfulPages++;
-          const investments = result.value.investments || [];
-          investments.forEach((inv: Investment) => {
-            const validation = validateInvestment(inv);
-            validationResults.push({ ...validation, name: inv.name });
-            allInvestments.push(inv);
-          });
-        } else {
-          failedPages++;
-          if (result.status === 'rejected') {
-            console.error(`[${rid}] Batch promise rejected:`, result.reason);
+              extractedInvestments.forEach((investment: any) => {
+                if (investment && investment.name) {
+                  const enhanced = applyFallbackExtraction(investment, markdown);
+                  const validation = validateInvestment(enhanced);
+                  pageInvestments.push(enhanced);
+                  validationResults.push({ ...validation, name: enhanced.name });
+                }
+              });
+            }
+            
+            successfulPages++;
+            pageInvestments.forEach(inv => allInvestments.push(inv));
+            
+          } catch (pageError) {
+            console.error(`[${rid}] Error processing ${pageUrl}:`, pageError);
+            failedPages++;
           }
         }
-      });
+        
+      } catch (batchError) {
+        console.error(`[${rid}] Batch ${batchIdx + 1} error:`, batchError);
+        failedPages += batch.length;
+      }
       
       console.log(`[${rid}] Batch ${batchIdx + 1} complete: ${successfulPages} successful, ${failedPages} failed so far`);
     }
@@ -319,6 +281,10 @@ Deno.serve(async (req) => {
       ? Math.round(validationResults.reduce((sum, v) => sum + v.confidence, 0) / validationResults.length)
       : 0;
 
+    // Calculate credit savings
+    const totalRequests = cacheStats.hits + cacheStats.misses;
+    const firecrawlCreditsSaved = Math.round(cacheStats.hits * 0.8); // Estimate: 0.8 credits per cached request
+    
     const responseData = {
       success: true,
       partial: isPartial,
@@ -331,6 +297,7 @@ Deno.serve(async (req) => {
         failedPages,
         cacheHits: cacheStats.hits,
         cacheMisses: cacheStats.misses,
+        firecrawlCreditsSaved, // New: credit optimization metric
       },
       investments: cleanedInvestments,
       extractionQuality: {
@@ -349,7 +316,8 @@ Deno.serve(async (req) => {
     };
 
     console.log(`[${rid}] Returning response with ${cleanedInvestments.length} investments`);
-    console.log(`[${rid}] Cache stats: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hits + cacheStats.misses > 0 ? Math.round((cacheStats.hits / (cacheStats.hits + cacheStats.misses)) * 100) : 0}% hit rate)`);
+    console.log(`[${rid}] 💰 Credit savings: ${firecrawlCreditsSaved} credits saved via caching`);
+    console.log(`[${rid}] Cache stats: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${totalRequests > 0 ? Math.round((cacheStats.hits / totalRequests) * 100) : 0}% hit rate)`);
     console.log(`[${rid}] Crawl strategy: User depth=${crawlStrategy.userDepth}, Final depth=${crawlStrategy.finalDepth}, Pages=${crawlStrategy.pagesCrawled}/${crawlStrategy.pagesRequested}`);
     if (crawlStrategy.adaptiveReason) {
       console.log(`[${rid}] Adaptive reasoning: ${crawlStrategy.adaptiveReason}`);

@@ -2,3 +2,6 @@ project_id = "wlgryuxhyhenedntqife"
 
 [functions.scrape]
 verify_jwt = false
+
+[functions.firecrawl-webhook]
+verify_jwt = false

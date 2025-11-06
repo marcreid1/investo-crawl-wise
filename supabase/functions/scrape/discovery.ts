@@ -1,10 +1,79 @@
 /**
  * URL discovery and categorization for investment pages
  * Handles crawling, link harvesting, and page type detection
+ * Now includes preflight /v1/read for instant site-wide URL discovery
  */
 
 import type { CacheStats } from "./types.ts";
 import { getCachedResponse, saveCachedResponse } from "./cache.ts";
+
+/**
+ * Uses Firecrawl's /v1/read endpoint for instant site-wide URL discovery
+ * Returns all URLs from the site without crawling
+ */
+export async function readAllSiteUrls(
+  url: string,
+  apiKey: string,
+  supabaseUrl: string,
+  supabaseKey: string,
+  cacheStats: CacheStats
+): Promise<string[] | null> {
+  try {
+    const domain = new URL(url).hostname;
+    const readCacheKey = `read-${domain}`;
+    
+    console.log(`Attempting preflight /v1/read for domain: ${domain}`);
+    
+    // Check cache first
+    let readData = await getCachedResponse(supabaseUrl, supabaseKey, readCacheKey, 'read');
+    
+    if (readData) {
+      cacheStats.hits++;
+      console.log(`✓ Read cache HIT for ${domain}`);
+      return readData.urls || [];
+    }
+    
+    cacheStats.misses++;
+    
+    // Call /v1/read endpoint
+    const readResponse = await fetch("https://api.firecrawl.dev/v1/read", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url,
+        include_subdomains: false,
+      }),
+    });
+
+    if (!readResponse.ok) {
+      console.log(`/v1/read failed with status ${readResponse.status}, will fall back to crawl`);
+      return null;
+    }
+
+    const readResult = await readResponse.json();
+    const allUrls = readResult.urls || [];
+    
+    // Filter out irrelevant paths
+    const relevantUrls = allUrls.filter((pageUrl: string) => {
+      const path = pageUrl.toLowerCase();
+      return !path.match(/\/(news|blog|team|contact|about|careers|press|legal|privacy|terms)/i) &&
+             (path.includes('/portfolio') || path.includes('/investment') || path.includes('/company'));
+    });
+    
+    console.log(`✓ Read discovered ${relevantUrls.length}/${allUrls.length} relevant URLs instantly`);
+    
+    // Cache the result
+    await saveCachedResponse(supabaseUrl, supabaseKey, readCacheKey, 'read', { urls: relevantUrls });
+    
+    return relevantUrls;
+  } catch (error) {
+    console.error('Error in readAllSiteUrls:', error);
+    return null;
+  }
+}
 
 /**
  * Extracts detail page links from listing page HTML (internal + external)
@@ -173,8 +242,8 @@ function calculateAdaptiveDepth(
 }
 
 /**
- * Initiates a Firecrawl crawl and polls until completion or timeout
- * Now with adaptive depth adjustment based on initial discovery
+ * Initiates a Firecrawl crawl with webhook-driven completion
+ * Now with preflight /v1/read and adaptive depth adjustment
  */
 export async function discoverInvestmentPages(
   url: string,
@@ -196,7 +265,46 @@ export async function discoverInvestmentPages(
   adaptiveReason: string;
 }> {
   console.log(`[${rid}] Step 1: Discovering investment pages...`);
-  console.log(`JS-friendly options: onlyMainContent=true, waitFor=2000ms, timeout=25000ms`);
+  
+  // PREFLIGHT: Try /v1/read for instant URL discovery
+  console.log(`[${rid}] Preflight: attempting instant URL discovery via /v1/read...`);
+  const preflightUrls = await readAllSiteUrls(url, apiKey, supabaseUrl, supabaseKey, cacheStats);
+  
+  if (preflightUrls && preflightUrls.length > 0) {
+    console.log(`[${rid}] ✓ Preflight successful! Discovered ${preflightUrls.length} URLs without crawling`);
+    
+    // Categorize URLs
+    const listingPages: string[] = [];
+    const detailPages: string[] = [];
+    
+    preflightUrls.forEach(pageUrl => {
+      const urlPath = new URL(pageUrl).pathname.toLowerCase();
+      const isListingPage = 
+        pageUrl === url ||
+        urlPath.endsWith('/portfolio') ||
+        urlPath.endsWith('/portfolio/') ||
+        urlPath.endsWith('/investments') ||
+        urlPath.endsWith('/investments/');
+      
+      if (isListingPage) {
+        listingPages.push(pageUrl);
+      } else {
+        detailPages.push(pageUrl);
+      }
+    });
+    
+    return {
+      success: true,
+      discoveredUrls: preflightUrls,
+      listingPages,
+      detailPages,
+      isPartial: false,
+      adaptiveDepth: 0, // No crawl needed
+      adaptiveReason: `Preflight /v1/read discovered ${preflightUrls.length} URLs instantly - crawl skipped`
+    };
+  }
+  
+  console.log(`[${rid}] Preflight failed or empty, falling back to /v1/crawl...`);
   
   // ADAPTIVE DEPTH: Quick scan root page to determine optimal depth
   console.log(`[${rid}] Adaptive crawl: scanning root page for link density...`);
@@ -220,17 +328,31 @@ export async function discoverInvestmentPages(
   } else {
     cacheStats.misses++;
     
-      const crawlRequestBody: any = {
-        url: url,
-        limit: maxPagesValue,
-        maxDepth: finalDepth, // Use adaptive depth
-        scrapeOptions: {
-          formats: ["markdown", "html"],
-          onlyMainContent: true,
-          waitFor: 2000,
-          timeout: 25000,
-        },
-      };
+    // Get webhook URL
+    const projectRef = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1];
+    const webhookUrl = projectRef 
+      ? `${supabaseUrl}/functions/v1/firecrawl-webhook`
+      : undefined;
+    
+    const crawlRequestBody: any = {
+      url: url,
+      limit: maxPagesValue,
+      maxDepth: finalDepth, // Use adaptive depth
+      scrapeOptions: {
+        formats: ["markdown", "html"],
+        onlyMainContent: true,
+        waitFor: 2000,
+        timeout: 25000,
+      },
+    };
+    
+    // Add webhook if available
+    if (webhookUrl) {
+      crawlRequestBody.webhook = webhookUrl;
+      console.log(`[${rid}] Webhook enabled: ${webhookUrl}`);
+    } else {
+      console.log(`[${rid}] Webhook unavailable, will use polling`);
+    }
 
     console.log("Sending crawl request to Firecrawl API");
     const crawlInitResponse = await fetch(
