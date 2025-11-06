@@ -9,6 +9,14 @@ import type { Investment } from "./types.ts";
  */
 export function deduplicateInvestments(allInvestments: Investment[]): Investment[] {
   const investmentMap = new Map<string, Investment>();
+  
+  // Validation: Warn about generic names before deduplication
+  const genericNames = ['investments', 'portfolio', 'companies', 'investment', 'company'];
+  allInvestments.forEach(investment => {
+    if (genericNames.includes(investment.name.toLowerCase())) {
+      console.warn(`⚠️ Generic name detected: "${investment.name}" from ${investment.sourceUrl}`);
+    }
+  });
 
   allInvestments.forEach(investment => {
     const key = investment.name.toLowerCase().trim();

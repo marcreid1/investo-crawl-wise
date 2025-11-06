@@ -27,16 +27,44 @@ export function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
     
     const isSingleInvestmentPage = isDetailPage(pageUrl);
     
-    if (isSingleInvestmentPage && pageTitle) {
+    if (isSingleInvestmentPage && pageUrl) {
       console.log(`Detected single investment page, extracting from full content`);
       
+      // Extract company name from URL slug (primary source)
+      let urlDerivedName = '';
+      const urlParts = pageUrl.split('/').filter(p => p.length > 0);
+      if (urlParts.length > 0) {
+        const slug = urlParts[urlParts.length - 1];
+        urlDerivedName = slug
+          .split('-')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+      }
+      
+      console.log(`[EXTRACTION] URL: ${pageUrl}`);
+      console.log(`[EXTRACTION] URL-derived name: ${urlDerivedName}`);
+      console.log(`[EXTRACTION] Page title: ${pageTitle}`);
+      
       const investment: Investment = {
-        name: cleanInvestmentName(pageTitle),
+        name: urlDerivedName || cleanInvestmentName(pageTitle),
         sourceUrl: pageUrl,
         portfolioUrl: pageUrl,
       };
       
       const htmlText = page.html;
+      
+      // Try to extract company name from h1 tag (override URL-derived name if found)
+      const h1Pattern = /<h1[^>]*>([^<]+)<\/h1>/i;
+      const h1Match = htmlText.match(h1Pattern);
+      if (h1Match && h1Match[1] && h1Match[1].trim()) {
+        const h1Name = cleanInvestmentName(h1Match[1].trim());
+        if (h1Name && h1Name.toLowerCase() !== 'investments' && h1Name.toLowerCase() !== 'portfolio') {
+          investment.name = h1Name;
+          console.log(`[EXTRACTION] H1-derived name: ${h1Name}`);
+        }
+      }
+      
+      console.log(`[EXTRACTION] Final name: ${investment.name}`);
       
       const industryMatches = htmlText.match(/<(?:div|span|p)[^>]*(?:class|id)="[^"]*(?:industry|sector|category|vertical)[^"]*"[^>]*>([^<]+)<|(?:Industry|Sector|Category|Vertical)[\s:]+<[^>]*>([^<]+)</i);
       if (industryMatches) {
@@ -292,14 +320,31 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
     
     const isSingleInvestmentPage = isDetailPage(pageUrl);
     
-    if (isSingleInvestmentPage && pageTitle) {
+    if (isSingleInvestmentPage && pageUrl) {
       console.log(`Single investment page detected, extracting full details`);
       
+      // Extract company name from URL slug (primary source)
+      let urlDerivedName = '';
+      const urlParts = pageUrl.split('/').filter(p => p.length > 0);
+      if (urlParts.length > 0) {
+        const slug = urlParts[urlParts.length - 1];
+        urlDerivedName = slug
+          .split('-')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+      }
+      
+      console.log(`[EXTRACTION] URL: ${pageUrl}`);
+      console.log(`[EXTRACTION] URL-derived name: ${urlDerivedName}`);
+      console.log(`[EXTRACTION] Page title: ${pageTitle}`);
+      
       const investment: Investment = {
-        name: cleanInvestmentName(pageTitle),
+        name: urlDerivedName || cleanInvestmentName(pageTitle),
         sourceUrl: pageUrl,
         portfolioUrl: pageUrl,
       };
+      
+      console.log(`[EXTRACTION] Final name: ${investment.name}`);
       
       const industryPatterns = [
         /(?:Industry|Sector|Category|Vertical|Market)[\s:]+([A-Za-z\s&,\/.-]{3,50})(?:\n|$|<)/i,
