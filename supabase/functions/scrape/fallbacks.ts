@@ -49,14 +49,16 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
   
   if (!investment.ceo) {
     const ceoPatterns = [
+      /\*\*(?:CEO|President|Chief Executive|Managing Director|President & CEO)\*\*[\s:]*([A-Za-z\s\-'\.]+?)(?:\n|##|<|$)/i,
       /(?:CEO|President|Chief Executive|Managing Director|President & CEO|President and CEO)[\s:]+([A-Za-z\s\-'\.]+?)(?:\n|##|<|$|\*\*)/i,
+      /##\s*(?:CEO|Leadership|Management)\s*\n+([A-Za-z\s\-'\.]{3,50})/i,
     ];
     
     for (const pattern of ceoPatterns) {
       const match = markdown.match(pattern);
       if (match && match[1] && match[1].trim().length > 2 && match[1].trim().length < 50) {
         investment.ceo = match[1].trim();
-        console.log(`  Fallback found CEO: ${investment.ceo}`);
+        console.log(`  ✓ Fallback found CEO: ${investment.ceo}`);
         break;
       }
     }
@@ -64,14 +66,16 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
   
   if (!investment.industry) {
     const industryPatterns = [
+      /\*\*(?:Industry|Sector|Category|Vertical|Business)\*\*[\s:]*([A-Za-z\s&,\/\.-]{3,50})(?:\n|$|<|##)/i,
       /(?:Industry|Sector|Category|Vertical|Business)[\s:]+([A-Za-z\s&,\/\.-]{3,50})(?:\n|$|<|##|\*\*)/i,
+      /##\s*(?:Industry|Sector)\s*\n+([A-Za-z\s&,\/\.-]{3,50})/i,
     ];
     
     for (const pattern of industryPatterns) {
       const match = markdown.match(pattern);
       if (match && match[1]) {
         investment.industry = match[1].trim();
-        console.log(`  Fallback found industry: ${investment.industry}`);
+        console.log(`  ✓ Fallback found industry: ${investment.industry}`);
         break;
       }
     }
@@ -79,30 +83,37 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
   
   if (!investment.year) {
     const yearPatterns = [
+      /\*\*(?:Year\s+of\s+Initial\s+Investment|Investment\s+Year|Year Acquired|Initial Investment|Year|Date)\*\*[\s:]*(\d{4})/i,
       /(?:Year\s+of\s+Initial\s+Investment|Investment\s+Year|Year Acquired|Initial Investment)[\s:]+(\d{4})/i,
-      /(?:Since|In)\s+(\d{4})/i,
+      /(?:Since|In|Acquired in)\s+(\d{4})/i,
+      /\b(19\d{2}|20[0-2]\d)\b/,
     ];
     
     for (const pattern of yearPatterns) {
       const match = markdown.match(pattern);
       if (match && match[1]) {
-        investment.year = match[1].trim();
-        console.log(`  Fallback found year: ${investment.year}`);
-        break;
+        const year = match[1].trim();
+        if (parseInt(year) >= 1990 && parseInt(year) <= 2025) {
+          investment.year = year;
+          console.log(`  ✓ Fallback found year: ${year}`);
+          break;
+        }
       }
     }
   }
   
   if (!investment.location) {
     const locationPatterns = [
-      /(?:Location|Headquarters|HQ|Based in)[\s:]+([A-Za-z\s,\-'\.]+?)(?:\n|$|##|\*\*)/i,
+      /\*\*(?:Location|Headquarters|HQ|Based in|Office)\*\*[\s:]*([A-Za-z\s,\-'\.]+?)(?:\n|$|##)/i,
+      /(?:Location|Headquarters|HQ|Based in|Office)[\s:]+([A-Za-z\s,\-'\.]+?)(?:\n|$|##|\*\*)/i,
+      /##\s*(?:Location|Headquarters)\s*\n+([A-Za-z\s,\-'\.]{3,50})/i,
     ];
     
     for (const pattern of locationPatterns) {
       const match = markdown.match(pattern);
       if (match && match[1] && match[1].trim().length > 2) {
         investment.location = match[1].trim();
-        console.log(`  Fallback found location: ${investment.location}`);
+        console.log(`  ✓ Fallback found location: ${investment.location}`);
         break;
       }
     }
@@ -110,15 +121,17 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
   
   if (!investment.website) {
     const websitePatterns = [
-      /(?:Website|Web|URL)[\s:]+<?([a-z]+:\/\/[^\s<>\n]+)>?/i,
+      /\*\*(?:Website|Web|URL)\*\*[\s:]*<?([a-z]+:\/\/(?!.*ironbridge)[^\s<>\n]+)>?/i,
+      /(?:Website|Web|URL)[\s:]+<?([a-z]+:\/\/(?!.*ironbridge)[^\s<>\n]+)>?/i,
       /\[(?:Visit Website|Website|Company Site)\]\(([^)]+)\)/i,
+      /(https?:\/\/(?!.*ironbridge)[^\s<>\n)]+\.[a-z]{2,})/i,
     ];
     
     for (const pattern of websitePatterns) {
       const match = markdown.match(pattern);
-      if (match && match[1]) {
+      if (match && match[1] && !match[1].includes('ironbridge')) {
         investment.website = match[1].trim();
-        console.log(`  Fallback found website: ${investment.website}`);
+        console.log(`  ✓ Fallback found website: ${investment.website}`);
         break;
       }
     }
@@ -126,14 +139,50 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
   
   if (!investment.status) {
     const statusPatterns = [
-      /(?:Status|Investment Status)[\s:]+([A-Za-z\s()]+?)(?:\n|$|##|\*\*)/i,
+      /\*\*(?:Status|Investment Status)\*\*[\s:]*\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+      /(?:Status|Investment Status)[\s:]+\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
     ];
     
     for (const pattern of statusPatterns) {
       const match = markdown.match(pattern);
       if (match && match[1]) {
         investment.status = match[1].trim();
-        console.log(`  Fallback found status: ${investment.status}`);
+        console.log(`  ✓ Fallback found status: ${investment.status}`);
+        break;
+      }
+    }
+  }
+  
+  // Add ownership extraction
+  if (!investment.ownership) {
+    const ownershipPatterns = [
+      /\*\*(?:Ownership|Equity|Stake)\*\*[\s:]*(\d+(?:\.\d+)?%)/i,
+      /(?:Ownership|Equity|Stake)[\s:]+(\d+(?:\.\d+)?%)/i,
+      /(\d+(?:\.\d+)?%)\s*(?:ownership|equity|stake)/i,
+    ];
+    
+    for (const pattern of ownershipPatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1]) {
+        investment.ownership = match[1].trim();
+        console.log(`  ✓ Fallback found ownership: ${investment.ownership}`);
+        break;
+      }
+    }
+  }
+  
+  // Add investment role extraction
+  if (!investment.investmentRole) {
+    const rolePatterns = [
+      /\*\*(?:Investment Role|Role|Type|Strategy)\*\*[\s:]*([A-Za-z\s,\-]{3,50})(?:\n|$|##)/i,
+      /(?:Investment Role|Investment Type|Role|Type)[\s:]+([A-Za-z\s,\-]{3,50})(?:\n|$|##|\*\*)/i,
+    ];
+    
+    for (const pattern of rolePatterns) {
+      const match = markdown.match(pattern);
+      if (match && match[1]) {
+        investment.investmentRole = match[1].trim();
+        console.log(`  ✓ Fallback found investment role: ${investment.investmentRole}`);
         break;
       }
     }

@@ -421,6 +421,13 @@ Deno.serve(async (req) => {
           const markdown = scrapeData?.data?.markdown || scrapeData?.markdown;
           const html = scrapeData?.data?.html || scrapeData?.html;
           
+          // DEBUG: Log markdown sample for first detail page
+          if (markdown && detailPagesToProcess.indexOf(pageUrl) === 0) {
+            console.log(`[${rid}] 📄 MARKDOWN SAMPLE (first 500 chars):`);
+            console.log(markdown.substring(0, 500));
+            console.log(`[${rid}] 📄 END MARKDOWN SAMPLE`);
+          }
+          
           if (markdown || html) {
             const pageData = { markdown: markdown || "", html: html || "", metadata: { url: pageUrl } };
             const investments = extractInvestmentData(pageData);
