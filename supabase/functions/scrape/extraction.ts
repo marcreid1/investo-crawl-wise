@@ -641,6 +641,22 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       return investments;
     }
 
+    // Patterns that indicate this is NOT a company name
+    const NON_COMPANY_PATTERNS = [
+      /\b(we want|contact us|learn more|about us|our team|get in touch|click here)\b/i,
+      /\b(view all|see all|read more|find out|discover|explore)\b/i,
+      /\b(portfolio|investment|company|companies|business|businesses)\b$/i,
+      /^(the|our|your|their)\s/i,
+      /\?$/,
+      /\b(page|section|category|menu|navigation)\b/i,
+    ];
+
+    const hasProperCapitalization = (name: string): boolean => {
+      const words = name.split(/\s+/);
+      const capitalizedWords = words.filter(w => /^[A-Z]/.test(w));
+      return capitalizedWords.length / words.length >= 0.5;
+    };
+
     const headingPatterns = [
       /##\s+([A-Z][A-Za-z\s&.-]{2,80})(?:\s*\n)/g,
       /\*\*([A-Z][A-Za-z\s&.-]{2,80})\*\*/g,
@@ -652,9 +668,32 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
       const matches = [...text.matchAll(pattern)];
       matches.forEach(match => {
         const name = match[1].trim();
-        if (name.length >= 3 && name.length <= 80 && !name.includes('Portfolio') && !name.includes('Investment')) {
-          names.add(name);
+        
+        // Basic length check
+        if (name.length < 3 || name.length > 80) return;
+        
+        // Check against blacklist patterns
+        const isBlacklisted = NON_COMPANY_PATTERNS.some(pattern => pattern.test(name));
+        if (isBlacklisted) {
+          console.log(`  ✗ Filtered out non-company text: "${name}"`);
+          return;
         }
+        
+        // Word count check (company names are typically 1-5 words)
+        const words = name.split(/\s+/);
+        if (words.length > 5) {
+          console.log(`  ✗ Filtered out (too many words): "${name}"`);
+          return;
+        }
+        
+        // Capitalization check
+        if (!hasProperCapitalization(name)) {
+          console.log(`  ✗ Filtered out (poor capitalization): "${name}"`);
+          return;
+        }
+        
+        // Passed all filters
+        names.add(name);
       });
       if (names.size > 2) break;
     }
