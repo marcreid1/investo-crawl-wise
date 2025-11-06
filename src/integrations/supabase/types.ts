@@ -14,6 +14,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      firecrawl_cache: {
+        Row: {
+          content_type: string
+          created_at: string
+          expires_at: string
+          id: string
+          response_data: Json
+          url: string
+        }
+        Insert: {
+          content_type: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          response_data: Json
+          url: string
+        }
+        Update: {
+          content_type?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          response_data?: Json
+          url?: string
+        }
+        Relationships: []
+      }
       scraping_history: {
         Row: {
           created_at: string
@@ -49,7 +76,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      cleanup_expired_cache: { Args: never; Returns: undefined }
     }
     Enums: {
       [_ in never]: never
