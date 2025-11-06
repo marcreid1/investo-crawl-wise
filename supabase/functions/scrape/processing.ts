@@ -32,8 +32,19 @@ export function deduplicateInvestments(allInvestments: Investment[]): Investment
   allInvestments.forEach(investment => {
     const key = normalizeForDeduplication(investment.name);
     
-    if (investmentMap.has(key)) {
-      const existing = investmentMap.get(key)!;
+    // Check for exact match OR substring match (to catch "Gesco" vs "Gesco Industries Inc")
+    let matchingKey: string | undefined;
+    for (const existingKey of investmentMap.keys()) {
+      if (existingKey === key || 
+          existingKey.includes(key) || 
+          key.includes(existingKey)) {
+        matchingKey = existingKey;
+        break;
+      }
+    }
+    
+    if (matchingKey) {
+      const existing = investmentMap.get(matchingKey)!;
       
       // Count non-empty fields to determine which entry has more data
       const existingFields = Object.values(existing).filter(v => v).length;
@@ -42,15 +53,17 @@ export function deduplicateInvestments(allInvestments: Investment[]): Investment
       // Prioritize the entry with MORE data
       if (newFields > existingFields) {
         // Keep the new investment but merge in any fields from existing
-        investmentMap.set(key, {
+        const merged = {
           ...existing,
           ...investment,
           name: investment.name, // Use the name with more detail (e.g., "Ltd.")
-        });
+        };
+        investmentMap.delete(matchingKey);
+        investmentMap.set(key, merged);
         console.log(`  ✓ Merged duplicate: kept "${investment.name}" (${newFields} fields) over "${existing.name}" (${existingFields} fields)`);
       } else {
         // Keep existing but fill in any missing fields from new
-        investmentMap.set(key, {
+        investmentMap.set(matchingKey, {
           ...investment,
           ...existing,
           name: existing.name,
