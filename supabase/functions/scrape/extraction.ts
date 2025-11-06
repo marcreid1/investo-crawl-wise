@@ -148,11 +148,13 @@ export function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
         }
       }
       
-      // Extract ownership percentage
+      // Extract ownership - with qualitative and quantitative patterns
       const ownershipPatterns = [
         /(?:Ownership|Equity|Stake)[\s:]*<[^>]*>(\d+(?:\.\d+)?%)/i,
         /(?:Ownership|Equity|Stake)[\s:]+(\d+(?:\.\d+)?%)/i,
         /(\d+(?:\.\d+)?%)\s*(?:ownership|equity|stake)/i,
+        /(majority|minority|controlling|significant|partial)\s+(?:stake|ownership|interest|investment)/i,
+        /(?:acquired|owns|holds)\s+(\d+(?:\.\d+)?%)/i,
       ];
       
       for (const pattern of ownershipPatterns) {
@@ -179,18 +181,33 @@ export function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
         }
       }
       
-      // Extract status
+      // Extract status - check category links and taxonomy
       const statusPatterns = [
+        /<a[^>]*href="[^"]*portfolio_cat\/(current|exited)[^"]*"[^>]*>([^<]+)<\/a>/i,
+        /category[^>]*>?\s*(current|exited|active|realized)/i,
+        /(?:Portfolio|Category)[\s:]*(?:<[^>]*>)?(Current|Exited|Active|Realized)/i,
         /(?:Status|Investment Status)[\s:]*<[^>]*>(Active|Current|Exited|Realized|Portfolio Company)</i,
         /(?:Status|Investment Status)[\s:]+(Active|Current|Exited|Realized|Portfolio Company)/i,
+        /<span[^>]*class="[^"]*(?:status|category)[^"]*"[^>]*>([^<]+)<\/span>/i,
       ];
       
       for (const pattern of statusPatterns) {
         const match = htmlText.match(pattern);
-        if (match && match[1]) {
-          investment.status = match[1].trim();
-          console.log(`  ✓ Status found: ${investment.status}`);
-          break;
+        if (match) {
+          const statusValue = (match[1] || match[2])?.trim().toLowerCase();
+          if (statusValue && (statusValue.includes('current') || statusValue.includes('active'))) {
+            console.log(`  ✓ Status found: Current`);
+            investment.status = 'Current';
+            break;
+          } else if (statusValue && (statusValue.includes('exited') || statusValue.includes('realized'))) {
+            console.log(`  ✓ Status found: Exited`);
+            investment.status = 'Exited';
+            break;
+          } else if (statusValue) {
+            console.log(`  ✓ Status found: ${statusValue}`);
+            investment.status = statusValue;
+            break;
+          }
         }
       }
       
@@ -504,11 +521,13 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
         }
       }
       
-      // Extract ownership
+      // Extract ownership - with qualitative and quantitative patterns
       const ownershipPatterns = [
         /\*\*(?:Ownership|Equity|Stake)\*\*[\s:]*(\d+(?:\.\d+)?%)/i,
         /(?:Ownership|Equity|Stake)[\s:]+(\d+(?:\.\d+)?%)/i,
         /(\d+(?:\.\d+)?%)\s*(?:ownership|equity|stake)/i,
+        /(majority|minority|controlling|significant|partial)\s+(?:stake|ownership|interest|investment)/i,
+        /(?:acquired|owns|holds)\s+(\d+(?:\.\d+)?%)/i,
       ];
       
       for (const pattern of ownershipPatterns) {
@@ -535,18 +554,32 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
         }
       }
       
-      // Extract status
+      // Extract status - check for category mentions and markdown links
       const statusPatterns = [
-        /\*\*(?:Status|Investment Status)\*\*[\s:]*\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
-        /(?:Status|Investment Status)[\s:]+\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+        /\[([^\]]+)\]\([^)]*portfolio_cat\/(current|exited)[^)]*\)/i,
+        /\*\*(?:Status|Investment Status|Category)\*\*[\s:]*\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+        /(?:Status|Investment Status|Category)[\s:]+\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+        /(?:Portfolio|Category)[\s:]+\*\*(Current|Exited|Active|Realized)\*\*/i,
+        /(Current|Exited|Active|Realized)\s+(?:Portfolio|Investment)/i,
       ];
       
       for (const pattern of statusPatterns) {
         const match = text.match(pattern);
-        if (match && match[1]) {
-          investment.status = match[1].trim();
-          console.log(`  ✓ Status found: ${investment.status}`);
-          break;
+        if (match) {
+          const statusValue = (match[1] || match[2])?.trim().toLowerCase();
+          if (statusValue && (statusValue.includes('current') || statusValue.includes('active'))) {
+            console.log(`  ✓ Status found: Current`);
+            investment.status = 'Current';
+            break;
+          } else if (statusValue && (statusValue.includes('exited') || statusValue.includes('realized'))) {
+            console.log(`  ✓ Status found: Exited`);
+            investment.status = 'Exited';
+            break;
+          } else if (statusValue) {
+            console.log(`  ✓ Status found: ${statusValue}`);
+            investment.status = statusValue;
+            break;
+          }
         }
       }
       

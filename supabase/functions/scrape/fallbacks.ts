@@ -139,26 +139,47 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
   
   if (!investment.status) {
     const statusPatterns = [
-      /\*\*(?:Status|Investment Status)\*\*[\s:]*\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
-      /(?:Status|Investment Status)[\s:]+\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+      /\[([^\]]+)\]\([^)]*portfolio_cat\/(current|exited)[^)]*\)/i,
+      /(?:category|portfolio)[:\s]*(current|exited|active|realized)/i,
+      /\*\*(?:Status|Investment Status|Category)\*\*[\s:]*\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+      /(?:Status|Investment Status|Category)[\s:]+\*?\*?(Active|Current|Exited|Realized|Portfolio Company)\*?\*?/i,
+      /(current|exited|active|realized)\s+portfolio/i,
     ];
     
     for (const pattern of statusPatterns) {
       const match = markdown.match(pattern);
-      if (match && match[1]) {
-        investment.status = match[1].trim();
-        console.log(`  ✓ Fallback found status: ${investment.status}`);
-        break;
+      if (match) {
+        const statusValue = (match[1] || match[2])?.trim().toLowerCase();
+        if (statusValue && (statusValue.includes('current') || statusValue.includes('active'))) {
+          console.log(`  ✓ Fallback found status: Current`);
+          investment.status = 'Current';
+          break;
+        } else if (statusValue && (statusValue.includes('exited') || statusValue.includes('realized'))) {
+          console.log(`  ✓ Fallback found status: Exited`);
+          investment.status = 'Exited';
+          break;
+        }
       }
     }
   }
   
-  // Add ownership extraction
+  // Default to "Current" for recent investments (2020+)
+  if (!investment.status && investment.year) {
+    const year = parseInt(investment.year);
+    if (year >= 2020) {
+      console.log(`  ✓ Fallback defaulted status to Current (recent investment)`);
+      investment.status = 'Current';
+    }
+  }
+  
+  // Add ownership extraction with qualitative and quantitative patterns
   if (!investment.ownership) {
     const ownershipPatterns = [
       /\*\*(?:Ownership|Equity|Stake)\*\*[\s:]*(\d+(?:\.\d+)?%)/i,
       /(?:Ownership|Equity|Stake)[\s:]+(\d+(?:\.\d+)?%)/i,
       /(\d+(?:\.\d+)?%)\s*(?:ownership|equity|stake)/i,
+      /(majority|minority|controlling|significant|partial)\s+(?:stake|ownership|interest|investment)/i,
+      /(?:acquired|owns|holds)\s+(\d+(?:\.\d+)?%)/i,
     ];
     
     for (const pattern of ownershipPatterns) {
@@ -168,6 +189,18 @@ export function applyFallbackExtraction(investment: Investment, markdown?: strin
         console.log(`  ✓ Fallback found ownership: ${investment.ownership}`);
         break;
       }
+    }
+  }
+  
+  // Infer ownership from investment role if still not found
+  if (!investment.ownership && investment.investmentRole) {
+    const role = investment.investmentRole.toLowerCase();
+    if (role.includes('lead') || role.includes('control') || role.includes('majority')) {
+      console.log(`  ✓ Fallback inferred ownership from role: Majority stake`);
+      investment.ownership = 'Majority stake';
+    } else if (role.includes('minority') || role.includes('co-investor')) {
+      console.log(`  ✓ Fallback inferred ownership from role: Minority stake`);
+      investment.ownership = 'Minority stake';
     }
   }
   
