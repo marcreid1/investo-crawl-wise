@@ -441,7 +441,9 @@ Deno.serve(async (req) => {
                                 name: matchingInv.name, // Keep original name from listing
                                 portfolioUrl: matchingInv.portfolioUrl || detailInv.portfolioUrl,
                               });
-                              console.log(`[${rid}] ✓ Enriched ${matchingInv.name} with detail page data (industry: ${detailInv.industry}, year: ${detailInv.year})`);
+                              // Apply per-detail fallback enrichment using this detail page's markdown only
+                              applyFallbackExtraction(matchingInv, detailMarkdown);
+                              console.log(`[${rid}] ✓ Enriched ${matchingInv.name} with detail page data (industry: ${detailInv.industry}, year: ${detailInv.year}) and applied detail-level fallback`);
                             } else {
                               console.warn(`[${rid}] ⚠️ No match found for detail page ${detailUrl} (extracted: ${detailInv.name})`);
                             }
@@ -464,11 +466,11 @@ Deno.serve(async (req) => {
                 })));
               }
               
+              console.log(`[${rid}] Skipping listing-level fallback enrichment to avoid page-global fields for ${fallbackInvestments.length} items`);
               fallbackInvestments.forEach(inv => {
-                const enhanced = applyFallbackExtraction(inv, fallbackMarkdown);
-                const validation = validateInvestment(enhanced);
-                pageInvestments.push(enhanced);
-                return { investment: enhanced, validation };
+                const validation = validateInvestment(inv);
+                pageInvestments.push(inv);
+                return { investment: inv, validation };
               });
             }
             } else {
@@ -476,12 +478,12 @@ Deno.serve(async (req) => {
               const normalized = normalizeExtractedData(extracted, pageUrl);
               const extractedInvestments = Array.isArray(normalized) ? normalized : [normalized];
               
+              console.log(`[${rid}] Skipping listing-level fallback enrichment on AI-extracted items to avoid page-global fields`);
               extractedInvestments.forEach((investment: any) => {
                 if (investment && investment.name) {
-                  const enhanced = applyFallbackExtraction(investment, markdown);
-                  const validation = validateInvestment(enhanced);
-                  pageInvestments.push(enhanced);
-                  validationResults.push({ ...validation, name: enhanced.name });
+                  const validation = validateInvestment(investment);
+                  pageInvestments.push(investment);
+                  validationResults.push({ ...validation, name: investment.name });
                 }
               });
             }
