@@ -105,6 +105,90 @@ interface Investment {
   sourceUrl: string;
 }
 
+// ============= CACHE LAYER =============
+
+interface CacheEntry {
+  url: string;
+  content_type: string;
+  response_data: any;
+  created_at: string;
+  expires_at: string;
+}
+
+interface CacheStats {
+  hits: number;
+  misses: number;
+}
+
+// Helper: Get cached Firecrawl response
+async function getCachedResponse(
+  supabaseUrl: string,
+  supabaseKey: string,
+  url: string,
+  contentType: string
+): Promise<any | null> {
+  try {
+    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    const { data, error } = await supabase
+      .from('firecrawl_cache')
+      .select('*')
+      .eq('url', url)
+      .eq('content_type', contentType)
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (error) {
+      console.error('Cache lookup error:', error);
+      return null;
+    }
+    
+    if (data) {
+      console.log(`✓ Cache HIT for ${contentType}: ${url}`);
+      return data.response_data;
+    }
+    
+    console.log(`✗ Cache MISS for ${contentType}: ${url}`);
+    return null;
+  } catch (error) {
+    console.error('Cache get error:', error);
+    return null;
+  }
+}
+
+// Helper: Save Firecrawl response to cache
+async function saveCachedResponse(
+  supabaseUrl: string,
+  supabaseKey: string,
+  url: string,
+  contentType: string,
+  responseData: any
+): Promise<void> {
+  try {
+    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    const { error } = await supabase
+      .from('firecrawl_cache')
+      .insert({
+        url,
+        content_type: contentType,
+        response_data: responseData,
+      });
+    
+    if (error) {
+      console.error('Cache save error:', error);
+    } else {
+      console.log(`✓ Cached ${contentType}: ${url} (expires in 48h)`);
+    }
+  } catch (error) {
+    console.error('Cache save error:', error);
+  }
+}
+
 // Helper to harvest detail page links from listing page HTML (internal + external)
 function harvestDetailLinksFromHTML(html: string, baseUrl: string, maxPages: number = 50): { internal: string[], external: string[] } {
   if (!html) return { internal: [], external: [] };
@@ -1002,6 +1086,12 @@ Deno.serve(async (req) => {
 
     const rid = requestId || crypto.randomUUID();
     console.log(`[${rid}] Request received for URL: ${url}`);
+    console.log(`[${rid}] Firecrawl cache enabled (48-hour expiry)`);
+    
+    // Initialize cache stats
+    const cacheStats: CacheStats = { hits: 0, misses: 0 };
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
     if (!url || typeof url !== "string") {
       console.error(`[${rid}] Invalid URL provided:`, url);
@@ -1149,83 +1239,133 @@ Deno.serve(async (req) => {
     // First, crawl to discover all investment pages
     console.log("Step 1: Discovering investment pages...");
     console.log(`JS-friendly options: onlyMainContent=true, waitFor=2000ms, timeout=25000ms`);
-    const crawlRequestBody: any = {
-      url: url,
-      limit: maxPagesValue,
-      maxDepth: crawlDepthValue,
-      scrapeOptions: {
-        formats: ["markdown", "html"],
-        onlyMainContent: true,
-        waitFor: 2000,
-        timeout: 25000,
-      },
-    };
-
-    console.log("Sending crawl request to Firecrawl API");
-    const crawlInitResponse = await fetch(
-      "https://api.firecrawl.dev/v1/crawl",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+    
+    // Check cache for crawl results
+    const crawlCacheKey = `${url}_depth${crawlDepthValue}_max${maxPagesValue}`;
+    let cachedCrawlData = await getCachedResponse(supabaseUrl, supabaseKey, crawlCacheKey, 'crawl');
+    
+    let crawlInitData: any;
+    let jobId: string;
+    
+    if (cachedCrawlData) {
+      cacheStats.hits++;
+      console.log("Using cached crawl results");
+      crawlInitData = cachedCrawlData;
+      jobId = crawlInitData.id; // Use cached job ID
+    } else {
+      cacheStats.misses++;
+      
+      const crawlRequestBody: any = {
+        url: url,
+        limit: maxPagesValue,
+        maxDepth: crawlDepthValue,
+        scrapeOptions: {
+          formats: ["markdown", "html"],
+          onlyMainContent: true,
+          waitFor: 2000,
+          timeout: 25000,
         },
-        body: JSON.stringify(crawlRequestBody),
-      }
-    );
+      };
 
-    if (!crawlInitResponse.ok) {
-      const errorText = await crawlInitResponse.text();
-      const status = crawlInitResponse.status;
-      console.error(`[${rid}] Firecrawl crawl API error: HTTP ${status}`, errorText);
-      
-      let errorMessage = `Firecrawl API error: ${errorText.substring(0, 200)}`;
-      if (status === 401 || status === 403) {
-        errorMessage = "Authentication failed - invalid or missing API key";
-      } else if (status === 402) {
-        errorMessage = "Out of API credits - please add more credits";
-      } else if (status === 429) {
-        errorMessage = "Rate limited - please retry later";
-      }
-      
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: errorMessage,
-          stage: "crawl-init",
-          statusCode: status
-        }),
+      console.log("Sending crawl request to Firecrawl API");
+      const crawlInitResponse = await fetch(
+        "https://api.firecrawl.dev/v1/crawl",
         {
-          status: status,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(crawlRequestBody),
         }
       );
-    }
 
-    const crawlInitData = await crawlInitResponse.json();
-    
-    if (!crawlInitData || !crawlInitData.id) {
-      console.error("Invalid response from Firecrawl API:", crawlInitData);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Invalid response from Firecrawl API - no job ID received",
-        }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+      if (!crawlInitResponse.ok) {
+        const errorText = await crawlInitResponse.text();
+        const status = crawlInitResponse.status;
+        console.error(`[${rid}] Firecrawl crawl API error: HTTP ${status}`, errorText);
+        
+        let errorMessage = `Firecrawl API error: ${errorText.substring(0, 200)}`;
+        if (status === 401 || status === 403) {
+          errorMessage = "Authentication failed - invalid or missing API key";
+        } else if (status === 402) {
+          errorMessage = "Out of API credits - please add more credits";
+        } else if (status === 429) {
+          errorMessage = "Rate limited - please retry later";
         }
-      );
+        
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: errorMessage,
+            stage: "crawl-init",
+            statusCode: status
+          }),
+          {
+            status: status,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      crawlInitData = await crawlInitResponse.json();
+      
+      if (!crawlInitData || !crawlInitData.id) {
+        console.error("Invalid response from Firecrawl API:", crawlInitData);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "Invalid response from Firecrawl API - no job ID received",
+          }),
+          {
+            status: 500,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+      
+      jobId = crawlInitData.id;
+      console.log("Crawl job initiated with ID:", jobId);
     }
     
-    const jobId = crawlInitData.id;
-    console.log("Crawl job initiated with ID:", jobId);
-
-    // Poll for crawl completion with reduced timeout budget
-    let crawlComplete = false;
+    // If using cached data, skip polling and use cached URLs directly
+    let crawlComplete = cachedCrawlData ? true : false;
     let discoveredUrls: string[] = [];
     let listingPages: string[] = [];
     let detailPages: string[] = [];
+    
+    if (cachedCrawlData) {
+      // Extract URLs from cached crawl data
+      if (cachedCrawlData.data && cachedCrawlData.data.length > 0) {
+        discoveredUrls = cachedCrawlData.data
+          .map((page: any) => page.metadata?.url)
+          .filter((url: string) => url && (url.includes('/investment') || url.includes('/portfolio') || url.includes('/company')));
+        
+        // Categorize URLs
+        discoveredUrls.forEach(pageUrl => {
+          const urlPath = new URL(pageUrl).pathname.toLowerCase();
+          const isListingPage = 
+            pageUrl === url ||
+            urlPath.endsWith('/portfolio') ||
+            urlPath.endsWith('/portfolio/') ||
+            urlPath.endsWith('/investments') ||
+            urlPath.endsWith('/investments/') ||
+            urlPath === '/portfolio' ||
+            urlPath === '/portfolio/' ||
+            urlPath === '/investments' ||
+            urlPath === '/investments/';
+          
+          if (isListingPage) {
+            listingPages.push(pageUrl);
+          } else {
+            detailPages.push(pageUrl);
+          }
+        });
+        
+        console.log(`[${rid}] Extracted ${discoveredUrls.length} URLs from cache (${listingPages.length} listing, ${detailPages.length} detail)`);
+      }
+    }
+    
     const maxAttempts = 30; // Poll for up to 60 seconds (30 * 2s)
     let attempts = 0;
 
@@ -1299,6 +1439,9 @@ Deno.serve(async (req) => {
         if (crawlData?.status === "completed") {
           crawlComplete = true;
           console.log(`[${rid}] Crawl completed with ${discoveredUrls.length} investment pages`);
+          
+          // Cache the completed crawl data for future use
+          await saveCachedResponse(supabaseUrl, supabaseKey, crawlCacheKey, 'crawl', crawlData);
         } else if (crawlData?.status === "failed") {
           console.error(`[${rid}] Crawl job failed`);
           return new Response(
@@ -1369,28 +1512,45 @@ Deno.serve(async (req) => {
         
         console.log(`Extracting from ${extractionType} page: ${pageUrl}`);
         
-        const scrapeResponse = await fetch(
-          "https://api.firecrawl.dev/v1/scrape",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              url: pageUrl,
-              formats: ["extract", "markdown", "html"],
-              extract: {
-                schema: schemaToUse,
+        // Check cache first
+        const scrapeCacheType = isListingPage ? 'scrape-listing' : 'scrape-detail';
+        let scrapeData = await getCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType);
+        let scrapeResponseOk = true; // Track if response was successful
+        
+        if (scrapeData) {
+          cacheStats.hits++;
+        } else {
+          cacheStats.misses++;
+          
+          const scrapeResponse = await fetch(
+            "https://api.firecrawl.dev/v1/scrape",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
               },
-              onlyMainContent: true,
-              waitFor: 2000,
-              timeout: 25000,
-            }),
-          }
-        );
+              body: JSON.stringify({
+                url: pageUrl,
+                formats: ["extract", "markdown", "html"],
+                extract: {
+                  schema: schemaToUse,
+                },
+                onlyMainContent: true,
+                waitFor: 2000,
+                timeout: 25000,
+              }),
+            }
+          );
 
-        const scrapeData = !scrapeResponse.ok ? null : await scrapeResponse.json();
+          scrapeResponseOk = scrapeResponse.ok;
+          scrapeData = !scrapeResponse.ok ? null : await scrapeResponse.json();
+          
+          // Cache successful scrape results
+          if (scrapeData && scrapeResponse.ok) {
+            await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
+          }
+        }
         
         // Extract data from the correct Firecrawl v1 response structure
         const extracted = scrapeData?.data?.extract || scrapeData?.extract;
@@ -1398,15 +1558,14 @@ Deno.serve(async (req) => {
         const html = scrapeData?.data?.html || scrapeData?.html;
         
         // Determine if we need fallback extraction
-        const needsFallback = !scrapeResponse.ok || 
+        const needsFallback = !scrapeResponseOk || 
                               !scrapeData?.success || 
                               scrapeData?.code === 'SCRAPE_TIMEOUT' ||
                               !extracted;
         
         if (needsFallback) {
-          if (!scrapeResponse.ok) {
-            const errorText = await scrapeResponse.text();
-            console.error(`HTTP ${scrapeResponse.status} failed to extract from ${pageUrl}:`, errorText);
+          if (!scrapeResponseOk) {
+            console.error(`Failed to extract from ${pageUrl} (cache miss with error)`);
           } else if (!scrapeData?.success) {
             console.error(`scrapeData.success=false for ${pageUrl}, code=${scrapeData?.code}`);
           } else if (!extracted) {
@@ -1421,28 +1580,42 @@ Deno.serve(async (req) => {
           // If we don't have markdown/html yet, fetch it
           if (!fallbackMarkdown && !fallbackHtml) {
             try {
-              const markdownResponse = await fetch(
-                "https://api.firecrawl.dev/v1/scrape",
-                {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    url: pageUrl,
-                    formats: ["markdown", "html"],
-                    onlyMainContent: true,
-                    waitFor: 2000,
-                    timeout: 25000,
-                  }),
-                }
-              );
+              // Check cache for markdown
+              let markdownData = await getCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown');
               
-              if (markdownResponse.ok) {
-                const markdownData = await markdownResponse.json();
+              if (markdownData) {
+                cacheStats.hits++;
                 fallbackMarkdown = markdownData?.data?.markdown || markdownData?.markdown;
                 fallbackHtml = markdownData?.data?.html || markdownData?.html;
+              } else {
+                cacheStats.misses++;
+                
+                const markdownResponse = await fetch(
+                  "https://api.firecrawl.dev/v1/scrape",
+                  {
+                    method: "POST",
+                    headers: {
+                      Authorization: `Bearer ${apiKey}`,
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                      url: pageUrl,
+                      formats: ["markdown", "html"],
+                      onlyMainContent: true,
+                      waitFor: 2000,
+                      timeout: 25000,
+                    }),
+                  }
+                );
+                
+                if (markdownResponse.ok) {
+                  markdownData = await markdownResponse.json();
+                  fallbackMarkdown = markdownData?.data?.markdown || markdownData?.markdown;
+                  fallbackHtml = markdownData?.data?.html || markdownData?.html;
+                  
+                  // Cache the markdown result
+                  await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown', markdownData);
+                }
               }
             } catch (fetchError) {
               console.error(`Failed to fetch markdown/HTML for ${pageUrl}:`, fetchError);
@@ -1876,6 +2049,8 @@ Deno.serve(async (req) => {
         creditsUsed: discoveredUrls.length || 0,
         successfulPages: successfulPages || 0,
         failedPages: failedPages || 0,
+        cacheHits: cacheStats.hits,
+        cacheMisses: cacheStats.misses,
       },
       investments: cleanedInvestments || [],
       extractionQuality: {
@@ -1903,11 +2078,9 @@ Deno.serve(async (req) => {
     };
 
     console.log(`[${rid}] Returning response with ${cleanedInvestments.length} investments (partial: ${isPartial})`);
+    console.log(`[${rid}] Cache stats: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hits + cacheStats.misses > 0 ? Math.round((cacheStats.hits / (cacheStats.hits + cacheStats.misses)) * 100) : 0}% hit rate)`);
 
     // Save to history database in background (don't await)
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    
     if (supabaseUrl && supabaseKey) {
       console.log("Saving scraping history to database...");
       // Fire and forget - save history without blocking response
