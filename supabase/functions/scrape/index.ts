@@ -182,13 +182,24 @@ Deno.serve(async (req) => {
             const batchData = await batchResponse.json();
             const results = batchData.data || [];
             
-            // Batch failure detection: Check if batch succeeded but returned no data
+            // Robust batch failure detection
             const extractedCount = results.filter((r: any) => r?.data?.extract || r?.extract).length;
-            if (extractedCount === 0 && results.length > 0) {
-              console.log(`[${rid}] ⚠️ Batch returned empty extractions (0/${results.length}), falling back to markdown scrapes...`);
+            const needsFallback = results.length === 0 || 
+                                 extractedCount === 0 || 
+                                 results.length !== uncachedUrls.length;
+            
+            if (needsFallback) {
+              if (results.length === 0) {
+                console.log(`[${rid}] ⚠️ Batch returned 0 results, falling back to markdown scrapes for all ${uncachedUrls.length} URLs...`);
+              } else if (results.length !== uncachedUrls.length) {
+                console.log(`[${rid}] ⚠️ Batch returned ${results.length}/${uncachedUrls.length} results, falling back for missing URLs...`);
+              } else if (extractedCount === 0) {
+                console.log(`[${rid}] ⚠️ Batch returned empty extractions (0/${results.length}), falling back to markdown scrapes...`);
+              }
+              
               domainHealthTracker.recordFailure(url, 'other');
               
-              // Fall back to markdown scrapes
+              // Fall back to markdown scrapes for all uncached URLs
               for (const pageUrl of uncachedUrls) {
                 try {
                   const individualResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
@@ -211,6 +222,9 @@ Deno.serve(async (req) => {
                     await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown', scrapeData);
                     cachedResults.set(pageUrl, { pageUrl, isListingPage: true, scrapeData });
                     console.log(`[${rid}] ✅ Markdown fallback success: ${pageUrl}`);
+                  } else {
+                    console.error(`[${rid}] ❌ Markdown fallback failed for ${pageUrl}: ${individualResponse.status}`);
+                    failedPages++;
                   }
                 } catch (error) {
                   console.error(`[${rid}] ❌ Markdown fallback error for ${pageUrl}:`, error);
