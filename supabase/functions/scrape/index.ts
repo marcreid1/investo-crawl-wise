@@ -12,11 +12,15 @@ import { saveScrapingHistory } from "./storage.ts";
 import { cleanInvestment } from "./utils.ts";
 import { getCachedResponse, saveCachedResponse, getOrFetchSnapshot } from "./cache.ts";
 import { singleExtractionSchema, listingExtractionSchema, normalizeExtractedData } from "./schemas.ts";
+import { preflightCheck, DomainHealthTracker } from "./preflight.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// Global domain health tracker
+const domainHealthTracker = new DomainHealthTracker();
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -58,6 +62,24 @@ Deno.serve(async (req) => {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // PHASE 0: Preflight Validation
+    console.log(`[${rid}] Step 0: Preflight validation...`);
+    const preflightResult = await preflightCheck(url, rid);
+    const domainHealth = domainHealthTracker.getHealth(url);
+    
+    console.log(`[${rid}] 📊 Preflight score: ${preflightResult.confidence}/100`);
+    if (domainHealth) {
+      console.log(`[${rid}] 📊 Domain health: ${domainHealth.successCount} successes, ${domainHealth.failureCount} failures (${domainHealth.consecutiveFailures} consecutive)`);
+    }
+
+    // Check domain health cache
+    const shouldSkipBatch = domainHealthTracker.shouldSkipBatch(url);
+    const forceFallbackMode = !preflightResult.shouldUseBatch || shouldSkipBatch;
+    
+    if (forceFallbackMode) {
+      console.log(`[${rid}] ⚠️ Using fallback mode - Reason: ${!preflightResult.shouldUseBatch ? 'Low preflight confidence' : 'Domain health issues'}`);
     }
 
     // PHASE 1: Discovery (with adaptive depth)
@@ -129,11 +151,51 @@ Deno.serve(async (req) => {
         
         console.log(`[${rid}] Batch cache: ${cachedResults.size} hits, ${uncachedUrls.length} misses`);
         
-        // Fetch uncached URLs using /v1/scrape/batch
+        // Fetch uncached URLs using /v1/batch/scrape (unless forced fallback mode)
         if (uncachedUrls.length > 0) {
           crawlStrategy.individualRequests += uncachedUrls.length;
           
-          const batchResponse = await fetch("https://api.firecrawl.dev/v1/batch/scrape", {
+          // Skip batch mode if preflight or domain health suggests fallback
+          if (forceFallbackMode) {
+            console.log(`[${rid}] ⚠️ Skipping batch mode, using individual scrapes for ${uncachedUrls.length} URLs...`);
+            
+            for (const pageUrl of uncachedUrls) {
+              try {
+                const individualResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+                  method: "POST",
+                  headers: { 
+                    Authorization: `Bearer ${apiKey}`, 
+                    "Content-Type": "application/json" 
+                  },
+                  body: JSON.stringify({
+                    url: pageUrl,
+                    formats: ["markdown", "html"],
+                    onlyMainContent: true,
+                    waitFor: 2000,
+                    timeout: 25000,
+                  }),
+                });
+                
+                if (individualResponse.ok) {
+                  const scrapeData = await individualResponse.json();
+                  const isListingPage = listingPages.includes(pageUrl);
+                  const scrapeCacheType = 'scrape-markdown';
+                  
+                  await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
+                  cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData });
+                  console.log(`[${rid}] ✅ Individual scrape success: ${pageUrl}`);
+                } else {
+                  console.error(`[${rid}] ❌ Individual scrape failed for ${pageUrl}: ${individualResponse.status}`);
+                  failedPages++;
+                }
+              } catch (error) {
+                console.error(`[${rid}] ❌ Individual scrape error for ${pageUrl}:`, error);
+                failedPages++;
+              }
+            }
+          } else {
+            // Use batch mode
+            const batchResponse = await fetch("https://api.firecrawl.dev/v1/batch/scrape", {
             method: "POST",
             headers: { 
               Authorization: `Bearer ${apiKey}`, 
@@ -155,6 +217,9 @@ Deno.serve(async (req) => {
             const batchData = await batchResponse.json();
             const results = batchData.data || [];
             
+            // Record success for domain health tracking
+            domainHealthTracker.recordSuccess(url);
+            
             for (let i = 0; i < uncachedUrls.length; i++) {
               const pageUrl = uncachedUrls[i];
               const scrapeData = results[i];
@@ -168,8 +233,55 @@ Deno.serve(async (req) => {
               }
             }
           } else {
-            console.error(`[${rid}] Batch request failed: ${batchResponse.status}`);
-            failedPages += uncachedUrls.length;
+            const statusCode = batchResponse.status;
+            console.error(`[${rid}] Batch request failed: ${statusCode}`);
+            
+            // Record failure for domain health tracking
+            const failureType = statusCode === 503 ? '503' : statusCode === 429 ? '429' : 'other';
+            domainHealthTracker.recordFailure(url, failureType);
+            
+            // Fallback to individual scrapes if batch fails or if forced fallback mode
+            if (forceFallbackMode || !batchResponse.ok) {
+              console.log(`[${rid}] 🔄 Falling back to individual scrapes for ${uncachedUrls.length} URLs...`);
+              
+              for (const pageUrl of uncachedUrls) {
+                try {
+                  const individualResponse = await fetch("https://api.firecrawl.dev/v1/scrape", {
+                    method: "POST",
+                    headers: { 
+                      Authorization: `Bearer ${apiKey}`, 
+                      "Content-Type": "application/json" 
+                    },
+                    body: JSON.stringify({
+                      url: pageUrl,
+                      formats: ["markdown", "html"],
+                      onlyMainContent: true,
+                      waitFor: 2000,
+                      timeout: 25000,
+                    }),
+                  });
+                  
+                  if (individualResponse.ok) {
+                    const scrapeData = await individualResponse.json();
+                    const isListingPage = listingPages.includes(pageUrl);
+                    const scrapeCacheType = 'scrape-markdown';
+                    
+                    await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, scrapeCacheType, scrapeData);
+                    cachedResults.set(pageUrl, { pageUrl, isListingPage, scrapeData });
+                    console.log(`[${rid}] ✅ Individual scrape success: ${pageUrl}`);
+                  } else {
+                    console.error(`[${rid}] ❌ Individual scrape failed for ${pageUrl}: ${individualResponse.status}`);
+                    failedPages++;
+                  }
+                } catch (error) {
+                  console.error(`[${rid}] ❌ Individual scrape error for ${pageUrl}:`, error);
+                  failedPages++;
+                }
+              }
+            } else {
+              failedPages += uncachedUrls.length;
+            }
+          }
           }
         }
         
@@ -292,13 +404,28 @@ Deno.serve(async (req) => {
       crawlStats: {
         completed: discoveredUrls.length,
         total: discoveredUrls.length,
-        creditsUsed: discoveredUrls.length,
+        creditsUsed: Math.max(1, Math.ceil(discoveredUrls.length / 10)),
         successfulPages,
         failedPages,
         cacheHits: cacheStats.hits,
         cacheMisses: cacheStats.misses,
-        firecrawlCreditsSaved, // New: credit optimization metric
+        firecrawlCreditsSaved,
       },
+      preflight: {
+        confidence: preflightResult.confidence,
+        accessible: preflightResult.accessible,
+        htmlBased: preflightResult.htmlBased,
+        hasInvestmentSignals: preflightResult.hasInvestmentSignals,
+        contentSize: preflightResult.contentLength ? `${(preflightResult.contentLength / 1024).toFixed(1)}KB` : 'unknown',
+        reasons: preflightResult.reasons,
+        usedBatchMode: !forceFallbackMode,
+      },
+      domainHealth: domainHealth ? {
+        domain: domainHealth.domain,
+        successRate: domainHealth.successCount / (domainHealth.successCount + domainHealth.failureCount),
+        consecutiveFailures: domainHealth.consecutiveFailures,
+        lastFailureType: domainHealth.lastFailureType,
+      } : undefined,
       investments: cleanedInvestments,
       extractionQuality: {
         totalPages: discoveredUrls.length,
