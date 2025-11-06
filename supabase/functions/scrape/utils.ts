@@ -5,12 +5,30 @@
 import type { Investment } from "./types.ts";
 
 /**
+ * Decodes HTML entities to their character equivalents
+ */
+export function decodeHtmlEntities(text: string): string {
+  if (!text) return "";
+  
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(parseInt(dec)))
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+/**
  * Cleans and normalizes text by removing common page fragments and extra whitespace
  */
 export function cleanText(text: string): string {
   if (!text) return "";
   
-  return text
+  return decodeHtmlEntities(text)
     .replace(/Investments\s*[-–—]\s*Page\s*\d+/gi, "")
     .replace(/Role\s*:\s*/gi, "")
     .replace(/Investment\s*:\s*/gi, "")
