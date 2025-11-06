@@ -7,6 +7,7 @@ import { Search, Database, FileSpreadsheet, AlertCircle, Settings as SettingsIco
 import { EmptyState } from "@/components/EmptyState";
 import { InvestmentTable } from "@/components/InvestmentTable";
 import { ScrapingHistory } from "@/components/ScrapingHistory";
+import { ScrapingProgress } from "@/components/ScrapingProgress";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { exportInvestments } from "@/utils/dataExport";
@@ -55,6 +56,7 @@ const Index = () => {
   const [url, setUrl] = useState("");
   const [isScraperRunning, setIsScraperRunning] = useState(false);
   const [scrapeData, setScrapeData] = useState<ScrapeResponse | null>(null);
+  const [currentRequestId, setCurrentRequestId] = useState<string | null>(null);
   const {
     toast
   } = useToast();
@@ -97,6 +99,7 @@ const Index = () => {
         enableCompanyTags: false
       } : getSettings();
       const requestId = crypto.randomUUID();
+      setCurrentRequestId(requestId);
       console.log(`Starting scrape with requestId: ${requestId}`);
       const {
         data,
@@ -254,6 +257,13 @@ const Index = () => {
             </div>
           </div>
         </Card>
+
+        {/* Progress Section */}
+        {isScraperRunning && currentRequestId && (
+          <div className="mb-8">
+            <ScrapingProgress requestId={currentRequestId} />
+          </div>
+        )}
 
         {/* Results Section */}
         <Card className="p-6 shadow-elegant min-h-[400px]">

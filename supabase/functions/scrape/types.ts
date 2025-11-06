@@ -69,3 +69,25 @@ export interface ValidationResult {
   missing: string[];
   method: string;
 }
+
+export interface StageInfo {
+  name: string;
+  status: 'pending' | 'in_progress' | 'success' | 'failed';
+  message?: string;
+  progress?: number;
+  details?: {
+    pagesDiscovered?: number;
+    pagesProcessed?: number;
+    investmentsFound?: number;
+    cacheHits?: number;
+    cacheMisses?: number;
+  };
+}
+
+export interface ProgressState {
+  validation: StageInfo;
+  discovery: StageInfo;
+  extraction: StageInfo;
+  processing: StageInfo;
+  complete: StageInfo;
+}

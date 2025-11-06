@@ -71,6 +71,39 @@ export type Database = {
         }
         Relationships: []
       }
+      scraping_progress: {
+        Row: {
+          created_at: string
+          current_stage: string
+          id: string
+          request_id: string
+          stage_status: string
+          stages: Json
+          updated_at: string
+          url: string
+        }
+        Insert: {
+          created_at?: string
+          current_stage: string
+          id?: string
+          request_id: string
+          stage_status: string
+          stages?: Json
+          updated_at?: string
+          url: string
+        }
+        Update: {
+          created_at?: string
+          current_stage?: string
+          id?: string
+          request_id?: string
+          stage_status?: string
+          stages?: Json
+          updated_at?: string
+          url?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

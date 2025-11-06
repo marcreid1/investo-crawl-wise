@@ -3,7 +3,7 @@
  * Orchestrates discovery, extraction, processing, and storage
  */
 
-import type { CacheStats, Investment, CrawlStrategy } from "./types.ts";
+import type { CacheStats, Investment, CrawlStrategy, ProgressState, StageInfo } from "./types.ts";
 import { discoverInvestmentPages, harvestDetailLinksFromHTML, isDetailPage } from "./discovery.ts";
 import { extractInvestmentData } from "./extraction.ts";
 import { validateInvestment, applyFallbackExtraction } from "./fallbacks.ts";
@@ -13,6 +13,7 @@ import { cleanInvestment } from "./utils.ts";
 import { getCachedResponse, saveCachedResponse, getOrFetchSnapshot } from "./cache.ts";
 import { singleExtractionSchema, listingExtractionSchema, normalizeExtractedData } from "./schemas.ts";
 import { preflightCheck, DomainHealthTracker } from "./preflight.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,6 +22,54 @@ const corsHeaders = {
 
 // Global domain health tracker
 const domainHealthTracker = new DomainHealthTracker();
+
+// Helper function to update progress
+async function updateProgress(
+  supabaseUrl: string,
+  supabaseKey: string,
+  requestId: string,
+  url: string,
+  stageName: keyof ProgressState,
+  status: StageInfo['status'],
+  updates: Partial<Omit<StageInfo, 'name' | 'status'>> = {}
+) {
+  const supabase = createClient(supabaseUrl, supabaseKey);
+  
+  // Fetch current state
+  const { data: existing } = await supabase
+    .from('scraping_progress')
+    .select('stages')
+    .eq('request_id', requestId)
+    .single();
+
+  const currentStages: ProgressState = existing?.stages || {
+    validation: { name: 'Validation', status: 'pending' },
+    discovery: { name: 'Discovery', status: 'pending' },
+    extraction: { name: 'Extraction', status: 'pending' },
+    processing: { name: 'Processing', status: 'pending' },
+    complete: { name: 'Complete', status: 'pending' },
+  };
+
+  // Update the specific stage
+  currentStages[stageName] = {
+    ...currentStages[stageName],
+    status,
+    ...updates,
+  };
+
+  // Upsert the progress record
+  await supabase
+    .from('scraping_progress')
+    .upsert({
+      request_id: requestId,
+      url,
+      current_stage: stageName,
+      stage_status: status,
+      stages: currentStages,
+    }, {
+      onConflict: 'request_id'
+    });
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -66,6 +115,10 @@ Deno.serve(async (req) => {
 
     // PHASE 0: Preflight Validation
     console.log(`[${rid}] Step 0: Preflight validation...`);
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'validation', 'in_progress', { 
+      message: 'Validating URL...' 
+    });
+    
     const preflightResult = await preflightCheck(url, rid);
     const domainHealth = domainHealthTracker.getHealth(url);
     
@@ -82,7 +135,15 @@ Deno.serve(async (req) => {
       console.log(`[${rid}] ⚠️ Using fallback mode - Reason: ${!preflightResult.shouldUseBatch ? 'Low preflight confidence' : 'Domain health issues'}`);
     }
 
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'validation', 'success', { 
+      message: 'URL validated successfully' 
+    });
+    
     // PHASE 1: Discovery (with adaptive depth)
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'discovery', 'in_progress', { 
+      message: 'Discovering investment pages...' 
+    });
+    
     const discoveryResult = await discoverInvestmentPages(
       url, apiKey, crawlDepthValue, maxPagesValue, rid, supabaseUrl, supabaseKey, cacheStats
     );
@@ -102,6 +163,16 @@ Deno.serve(async (req) => {
     crawlStrategy.pagesCrawled = discoveredUrls.length;
     
     console.log(`[${rid}] 📊 Crawl strategy: ${JSON.stringify(crawlStrategy)}`);
+    
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'discovery', 'success', {
+      message: `Found ${discoveredUrls.length} pages (${listingPages.length} listing, ${detailPages.length} detail)`,
+      details: { pagesDiscovered: discoveredUrls.length }
+    });
+    
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'extraction', 'in_progress', {
+      message: 'Extracting investment data...',
+      progress: 0
+    });
 
     // PHASE 2: Extraction (Markdown-First Strategy)
     console.log(`[${rid}] Step 2: Extracting data with markdown-first strategy...`);
@@ -136,6 +207,18 @@ Deno.serve(async (req) => {
     for (let batchIdx = 0; batchIdx < listingBatches.length; batchIdx++) {
       const batch = listingBatches[batchIdx];
       console.log(`[${rid}] Processing batch ${batchIdx + 1}/${listingBatches.length} (${batch.length} URLs)...`);
+      
+      const progress = Math.round(((batchIdx + 1) / listingBatches.length) * 50); // 50% for listing pages
+      await updateProgress(supabaseUrl, supabaseKey, rid, url, 'extraction', 'in_progress', {
+        message: `Processing batch ${batchIdx + 1}/${listingBatches.length}`,
+        progress,
+        details: { 
+          pagesProcessed: (batchIdx + 1) * BATCH_SIZE,
+          investmentsFound: allInvestments.length,
+          cacheHits: cacheStats.hits,
+          cacheMisses: cacheStats.misses
+        }
+      });
       
       try {
         // Check cache for each URL in batch
@@ -589,9 +672,27 @@ Deno.serve(async (req) => {
     }
 
     // PHASE 3: Processing
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'extraction', 'success', {
+      message: `Extracted ${allInvestments.length} investments`,
+      details: { investmentsFound: allInvestments.length }
+    });
+    
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'processing', 'in_progress', {
+      message: 'Deduplicating and cleaning data...'
+    });
+    
     console.log(`Deduplicating ${allInvestments.length} total investments...`);
     const uniqueInvestments = deduplicateInvestments(allInvestments);
     const cleanedInvestments = uniqueInvestments.map(cleanInvestment);
+    
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'processing', 'success', {
+      message: `Cleaned and deduplicated to ${cleanedInvestments.length} investments`
+    });
+    
+    await updateProgress(supabaseUrl, supabaseKey, rid, url, 'complete', 'success', {
+      message: `Completed! Found ${cleanedInvestments.length} unique investments`,
+      details: { investmentsFound: cleanedInvestments.length }
+    });
     
     // PHASE 4: Response
     const avgConfidence = validationResults.length > 0
