@@ -411,6 +411,15 @@ Deno.serve(async (req) => {
                   fallbackMarkdown = markdownData?.data?.markdown || markdownData?.markdown;
                   fallbackHtml = markdownData?.data?.html || markdownData?.html;
                   await saveCachedResponse(supabaseUrl, supabaseKey, pageUrl, 'scrape-markdown', markdownData);
+                } else if (markdownResponse.status === 408) {
+                  console.log(`[${rid}] ❌ Markdown fallback failed for ${pageUrl}: 408 timeout`);
+                  // If we have HTML from the original batch scrape, use that
+                  if (html) {
+                    fallbackHtml = html;
+                    console.log(`[${rid}] ✓ Using ${fallbackHtml.length} chars of HTML from batch scrape`);
+                  }
+                } else {
+                  console.log(`[${rid}] ❌ Markdown fallback failed for ${pageUrl}: ${markdownResponse.status}`);
                 }
               }
             }

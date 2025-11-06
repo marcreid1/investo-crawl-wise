@@ -654,7 +654,8 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
     const hasProperCapitalization = (name: string): boolean => {
       const words = name.split(/\s+/);
       const capitalizedWords = words.filter(w => /^[A-Z]/.test(w));
-      return capitalizedWords.length / words.length >= 0.5;
+      // Relaxed from 50% to 30% to allow "tech solutions LLC"
+      return capitalizedWords.length / words.length >= 0.3;
     };
 
     const headingPatterns = [
@@ -695,7 +696,7 @@ export function extractInvestmentDataFromText(page: CrawlData): Investment[] {
         // Passed all filters
         names.add(name);
       });
-      if (names.size > 2) break;
+      // Removed the 3-company limit to extract all companies
     }
 
     console.log(`Found ${names.size} potential investment names`);
