@@ -303,13 +303,15 @@ export function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
                 }
               }
 
-              // Extract the URL for this company from the card
+              // Extract the FULL detail page URL for this company from the card
               const urlPattern = /<a[^>]*href="([^"]+)"[^>]*>/i;
               const urlMatch = rowHtml.match(urlPattern);
               if (urlMatch && urlMatch[1]) {
                 try {
+                  // Make sure we capture the FULL URL, not just the base path
                   const companyUrl = new URL(urlMatch[1], pageUrl).href;
                   investment.portfolioUrl = companyUrl;
+                  console.log(`  ✓ Captured detail URL: ${companyUrl}`);
                   
                   // If we still don't have a name, derive it from the URL slug
                   if (!investment.name) {
@@ -368,7 +370,10 @@ export function extractInvestmentDataFromHTML(page: CrawlData): Investment[] {
                 }
               }
 
-              investment.portfolioUrl = pageUrl;
+              // Don't overwrite the portfolioUrl if we already captured it from the card link
+              if (!investment.portfolioUrl) {
+                investment.portfolioUrl = pageUrl;
+              }
 
               if (investment.name) {
                 investments.push(investment);

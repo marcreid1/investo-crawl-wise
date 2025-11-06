@@ -484,9 +484,23 @@ Deno.serve(async (req) => {
                             // 1. Try URL matching (most reliable)
                             if (detailUrl) {
                               const detailSlug = detailUrl.split('/').filter(p => p).pop() || '';
-                              matchingInv = fallbackInvestments.find(inv => 
-                                inv.portfolioUrl && inv.portfolioUrl.includes(detailSlug)
-                              );
+                              matchingInv = fallbackInvestments.find(inv => {
+                                if (!inv.portfolioUrl) return false;
+                                
+                                // Check if portfolioUrl is the full detail URL
+                                if (inv.portfolioUrl.includes(detailSlug)) return true;
+                                
+                                // Check if portfolioUrl is just the base listing URL
+                                // In this case, try to match by name similarity instead
+                                const isBaseUrl = inv.portfolioUrl.endsWith('/investments/') || 
+                                                  inv.portfolioUrl.endsWith('/portfolio/');
+                                if (isBaseUrl) {
+                                  // Fall through to name matching
+                                  return false;
+                                }
+                                
+                                return false;
+                              });
                               if (matchingInv) {
                                 console.log(`[${rid}] ✓ Matched via URL: ${matchingInv.name} -> ${detailUrl}`);
                               }
@@ -522,13 +536,14 @@ Deno.serve(async (req) => {
                               Object.assign(matchingInv, {
                                 ...detailInv,
                                 name: matchingInv.name, // Keep original name from listing
-                                portfolioUrl: matchingInv.portfolioUrl || detailInv.portfolioUrl,
+                                portfolioUrl: detailUrl, // Update with actual detail URL
                               });
                               // Apply per-detail fallback enrichment using this detail page's markdown only
                               applyFallbackExtraction(matchingInv, detailMarkdown);
                               console.log(`[${rid}] ✓ Enriched ${matchingInv.name} with detail page data (industry: ${detailInv.industry}, year: ${detailInv.year}) and applied detail-level fallback`);
                             } else {
                               console.warn(`[${rid}] ⚠️ No match found for detail page ${detailUrl} (extracted: ${detailInv.name})`);
+                              // DO NOT add detailInv to pageInvestments - it's a duplicate that couldn't be matched
                             }
                           }
                         }
